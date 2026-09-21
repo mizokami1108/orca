@@ -13,6 +13,10 @@ import { wakelockSetParamsSchema } from '../mobile-web-shell/bridge/bridge-audio
  * with a tag still held has it given back for it — the page is a document that can navigate, fault
  * or be swiped away mid-dictation, and nothing else would ever call `deactivate`, so the screen
  * would stay awake for the app's lifetime.
+ *
+ * So the set means "the device still has this tag", not "the page asked for it": a deactivation the
+ * device refused leaves the tag recorded, because the page's owner queues exactly that failure for
+ * a retry and the retry has to reach the device.
  */
 export type WakelockDevice = {
   readonly activate: (tag: string) => Promise<void>
@@ -45,8 +49,13 @@ export function createNativeWakelockServer(device: WakelockDevice): NativeWakelo
         held.add(tag)
         return { active: true }
       }
-      if (held.delete(tag)) {
+      if (held.has(tag)) {
+        // Deleted only once the device has really dropped it. A refusal rejects out of here, which
+        // is how the page's owner learns to queue a retry — and that retry arrives as another
+        // `active: false`, so the tag has to still be recorded or it would answer "not held"
+        // without calling anything and leave the native tag on for the life of the app.
         await device.deactivate(tag)
+        held.delete(tag)
       }
       return { active: false }
     },
@@ -55,9 +64,15 @@ export function createNativeWakelockServer(device: WakelockDevice): NativeWakelo
       for (const tag of held) {
         // Quiet, for the reason every other dispose here is: this runs while a screen is going
         // away, and a device that would not drop a tag is not something the page can be told about.
-        void device.deactivate(tag).catch(() => undefined)
+        // Forgotten only on success, so one this device refused stays recorded and a later release
+        // still reaches it.
+        void device.deactivate(tag).then(
+          () => {
+            held.delete(tag)
+          },
+          () => undefined
+        )
       }
-      held.clear()
     }
   }
 }

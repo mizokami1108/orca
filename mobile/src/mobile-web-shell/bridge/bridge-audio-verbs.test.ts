@@ -492,6 +492,55 @@ describe('the wake lock', () => {
     await expect(serve({ active: true, tag: 'orca-c' })).rejects.toBeInstanceOf(Error)
   })
 
+  it('keeps a tag recorded when the device refused to drop it, so a retry reaches the device', async () => {
+    // The page's owner queues a failed deactivation and retries it (`pendingCleanupTags` in
+    // `mobile-dictation-keep-awake.ts`). That retry arrives here as another `active: false`, and it
+    // has to reach the device: a shell that had already forgotten the tag answers "not held"
+    // without calling anything, and the native tag stays on for the life of the app.
+    const calls: string[] = []
+    let refuse = true
+    const { serve } = createNativeWakelockServer({
+      activate: async (tag) => {
+        calls.push(`+${tag}`)
+      },
+      deactivate: async (tag) => {
+        calls.push(`-${tag}`)
+        if (refuse) {
+          throw new Error('the device would not drop the tag')
+        }
+      }
+    })
+    await serve({ active: true, tag: 'orca-f' })
+    // The refusal crosses, so the page's owner knows to queue a retry rather than believing it.
+    await expect(serve({ active: false, tag: 'orca-f' })).rejects.toBeInstanceOf(Error)
+    refuse = false
+    await expect(serve({ active: false, tag: 'orca-f' })).resolves.toEqual({ active: false })
+    expect(calls).toEqual(['+orca-f', '-orca-f', '-orca-f'])
+    // And once it is really gone, a third release asks the device nothing.
+    await expect(serve({ active: false, tag: 'orca-f' })).resolves.toEqual({ active: false })
+    expect(calls).toEqual(['+orca-f', '-orca-f', '-orca-f'])
+  })
+
+  it('keeps a tag a dispose could not drop, rather than forgetting it', async () => {
+    const calls: string[] = []
+    const { serve, dispose } = createNativeWakelockServer({
+      activate: async (tag) => {
+        calls.push(`+${tag}`)
+      },
+      deactivate: async (tag) => {
+        calls.push(`-${tag}`)
+        throw new Error('the device would not drop the tag')
+      }
+    })
+    await serve({ active: true, tag: 'orca-g' })
+    dispose()
+    await Promise.resolve()
+    await Promise.resolve()
+    // Still recorded, so the owner's retry is still able to reach the device through this server.
+    await expect(serve({ active: false, tag: 'orca-g' })).rejects.toBeInstanceOf(Error)
+    expect(calls).toEqual(['+orca-g', '-orca-g', '-orca-g'])
+  })
+
   it('gives back a tag whose activation landed after the session ended', async () => {
     // The page is a document that can be swiped away mid-dictation, so a dispose can fall between
     // the activate call and its reply. A tag recorded after that dispose is held by nobody and
