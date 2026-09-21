@@ -71,7 +71,7 @@ function createAudioShell(): (verb: BridgeNativeVerb, params: unknown) => Promis
     onInterruption: () => ({ remove: () => {} })
   }
   const capture = createNativeAudioCapture(engine)
-  const wakelock = createNativeWakelockServer({
+  const { serve: wakelock } = createNativeWakelockServer({
     activate: async () => undefined,
     deactivate: async () => undefined
   })

@@ -365,7 +365,7 @@ describe('the shell capture', () => {
 describe('the wake lock', () => {
   it('holds a tag, answers what the device did, and gives it back', async () => {
     const held: string[] = []
-    const serve = createNativeWakelockServer({
+    const { serve } = createNativeWakelockServer({
       activate: async (tag) => {
         held.push(`+${tag}`)
       },
@@ -380,7 +380,7 @@ describe('the wake lock', () => {
 
   it('does not ask the device to drop a tag it never took', async () => {
     const held: string[] = []
-    const serve = createNativeWakelockServer({
+    const { serve } = createNativeWakelockServer({
       activate: async (tag) => {
         held.push(`+${tag}`)
       },
@@ -393,12 +393,35 @@ describe('the wake lock', () => {
   })
 
   it('reports a tag the device refused as not held', async () => {
-    const serve = createNativeWakelockServer({
+    const { serve } = createNativeWakelockServer({
       activate: async () => {
         throw new Error('no keep-awake on this device')
       },
       deactivate: async () => undefined
     })
     await expect(serve({ active: true, tag: 'orca-c' })).rejects.toBeInstanceOf(Error)
+  })
+
+  it('gives back every tag it still holds when the session ends', async () => {
+    const held: string[] = []
+    const { serve, dispose } = createNativeWakelockServer({
+      activate: async (tag) => {
+        held.push(`+${tag}`)
+      },
+      deactivate: async (tag) => {
+        held.push(`-${tag}`)
+      }
+    })
+    await serve({ active: true, tag: 'orca-d' })
+    await serve({ active: true, tag: 'orca-e' })
+    await serve({ active: false, tag: 'orca-d' })
+    dispose()
+    await Promise.resolve()
+    // Only what was still held: a tag the page already gave back is not deactivated twice.
+    expect(held).toEqual(['+orca-d', '+orca-e', '-orca-d', '-orca-e'])
+    // And nothing is held afterwards, so a second dispose asks the device nothing.
+    dispose()
+    await Promise.resolve()
+    expect(held).toEqual(['+orca-d', '+orca-e', '-orca-d', '-orca-e'])
   })
 })

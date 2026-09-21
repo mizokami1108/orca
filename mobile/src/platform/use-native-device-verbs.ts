@@ -27,18 +27,19 @@ export function useNativeDeviceVerbs(
   // Keyed on the session for the registry's reason: a new page session is a new document, and a
   // microphone the previous one left open is nobody's to stop but this seam's.
   const audio = useMemo(() => createNativeAudioCapture(nativeAudioDeviceEngine), [sessionId])
-  const serveWakelock = useMemo(() => createNativeWakelockServer(nativeWakelockDevice), [sessionId])
+  const wakelock = useMemo(() => createNativeWakelockServer(nativeWakelockDevice), [sessionId])
   useEffect(() => () => audio.dispose(), [audio])
+  useEffect(() => () => wakelock.dispose(), [wakelock])
   return useMemo(
     () => (verb, params) => {
       if (verb === 'native.clipboard.write' || verb === 'native.clipboard.read') {
         return serveNativeClipboardVerb(verb, params)
       }
       if (verb === 'native.wakelock.set') {
-        return serveWakelock(params)
+        return wakelock.serve(params)
       }
       return verb.startsWith('native.audio.') ? audio.serve(verb, params) : serveMedia(verb, params)
     },
-    [audio, serveMedia, serveWakelock]
+    [audio, serveMedia, wakelock]
   )
 }
