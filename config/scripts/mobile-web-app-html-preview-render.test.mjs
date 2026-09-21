@@ -28,6 +28,7 @@ import { chromium, webkit } from 'playwright-core'
 import { lucideBarrelPlugin } from './build-mobile-web-app-bundle.mjs'
 import { mobileWebAppDependenciesPresent } from './mobile-web-app-bundle-dependencies.mjs'
 import { createBundleServer, readShellCsp } from './mobile-web-app-render-harness.mjs'
+import { describePreviewFrame, untilAborted } from './mobile-web-app-preview-frame-diagnosis.mjs'
 
 const mobileDir = fileURLToPath(new URL('../../mobile', import.meta.url))
 
@@ -316,7 +317,9 @@ async function open(
     ([html, override]) => window.__mount(html, override),
     [artifact(extra, nonce), sandbox ?? null]
   )
-  await waitForLoadedFrame(page, frameReady, signal)
+  // Named in every diagnostic, because the log shows the case and not which of its arms spoke.
+  const arm = `arm csp=${csp} sandbox=${sandbox ?? 'product'} frameReady=${frameReady} nonce=${nonce}`
+  const artifactFrame = await waitForLoadedFrame(page, frameReady, signal, browser, arm)
   const frames = () => page.frames().filter((frame) => frame !== page.mainFrame())
   // Sampled before the action as well as after: a case that taps a link is asking what the tap
   // produced, and by then the top frame is mid-navigation and the iframe has blanked to its own
@@ -329,7 +332,11 @@ async function open(
   // Every arm settles, acting or not: an artifact can start a navigation with no tap behind it --
   // `<meta http-equiv="refresh">` is one -- and the arms that pin zero were reading their counters
   // while that was still in flight.
-  await settleAfterMount(page, navigations, expectNavigation, signal)
+  await settleAfterMount(page, navigations, expectNavigation, signal, {
+    frame: artifactFrame,
+    browser,
+    arm
+  })
   const result = {
     page,
     pixelBefore,
@@ -426,7 +433,7 @@ for (const engine of ['chromium', 'webkit']) {
       }, 120_000)
 
       it('does not run the artifact, behind two fences either of which would hold', async (ctx) => {
-        const sealed = await open(browser(), { extra: { body: script() } })
+        const sealed = await open(browser(), { extra: { body: script() }, signal: ctx.signal })
         expect(sealed.pixel).toBe(ARTIFACT_RGB)
         expect(sealed.inside?.ran).toBe(0)
         expect(sealed.inside?.title).toBe('ARTIFACT')
@@ -469,7 +476,7 @@ for (const engine of ['chromium', 'webkit']) {
         expect(sealed.foreignHits).toEqual([])
         // The control: with no policy the same three subresources are fetched, so the empty list
         // above is the inherited `img-src` and `font-src` and not an artifact that never parsed.
-        const control = await open(browser(), { csp: null })
+        const control = await open(browser(), { csp: null, signal: ctx.signal })
         expect(control.pixel).toBe(ARTIFACT_RGB)
         expect(control.foreignHits).toEqual(
           expect.arrayContaining(['/img.png', '/css-bg.png', '/probe.woff2'])
@@ -676,7 +683,7 @@ describe('the HTML preview needs no policy change', () => {
  * had. `'load'` is for the one arm whose artifact deliberately navigates the frame somewhere else,
  * where no marker is ever coming.
  */
-async function waitForLoadedFrame(page, frameReady = 'artifact', signal) {
+async function waitForLoadedFrame(page, frameReady = 'artifact', signal, browser, arm) {
   const element = await page.waitForSelector('iframe', { timeout: 0 })
   const frame = await element.contentFrame()
   if (!frame) {
@@ -688,60 +695,18 @@ async function waitForLoadedFrame(page, frameReady = 'artifact', signal) {
       frame.waitForFunction(() => window.__ran === 1, undefined, { timeout: 0 }),
       signal,
       async () =>
-        `the artifact's script never ran inside the frame (${await describeFrame(page, frame)})`
+        `the artifact's script never ran inside the frame (${await describePreviewFrame(page, frame)})`
     )
   }
   if (frameReady !== 'load') {
     await untilAborted(
       frame.waitForSelector('#marker', { state: 'attached', timeout: 0 }),
       signal,
-      async () => `the artifact never parsed inside the frame (${await describeFrame(page, frame)})`
+      async () =>
+        `the artifact never parsed inside the frame: ${arm} | ${await describePreviewFrame(page, frame, browser)}`
     )
   }
   return frame
-}
-
-/**
- * A wait bounded by the case's own timeout and by nothing else.
- *
- * `ctx.signal` aborts when vitest times a case out, so no number in here races the one the case
- * declares. On abort the rig prints what the frame reported -- the reading that tells a frame the
- * policy refused from one that was merely slow, which is what CI's chromium timeouts could not say.
- * Nothing is rethrown: a rejection raised after vitest has given up on a case has nobody left to
- * catch it, and an unhandled one fails a run whose every test passed.
- */
-async function untilAborted(wait, signal, describe) {
-  await Promise.race([
-    wait,
-    new Promise((resolve) => {
-      if (!signal) {
-        return
-      }
-      const report = async () => {
-        const reading = await describe().catch(() => 'no reading available')
-        console.error(`[html-preview-render] ${reading}`)
-        resolve()
-      }
-      if (signal.aborted) {
-        void report()
-        return
-      }
-      signal.addEventListener('abort', () => void report(), { once: true })
-    })
-  ]).catch(() => {})
-}
-
-/** What a frame that never became ready did report, which is the whole diagnosis on a runner. */
-async function describeFrame(page, frame) {
-  const violations = await page.evaluate(() => window.__violations).catch(() => null)
-  const srcdocLength = await page
-    .evaluate(() => document.querySelector('iframe')?.getAttribute('srcdoc')?.length ?? null)
-    .catch(() => null)
-  return [
-    `frame url ${JSON.stringify(frame.url())}`,
-    `srcdoc ${String(srcdocLength)} chars`,
-    `page violations ${JSON.stringify(violations)}`
-  ].join(', ')
 }
 
 /**
@@ -751,16 +716,17 @@ async function describeFrame(page, frame) {
  * record itself rather than for a clock. An arm that expects none has nothing to await, so it takes
  * the bounded path below.
  */
-async function settleAfterMount(page, navigations, expectNavigation, signal) {
+async function settleAfterMount(page, navigations, expectNavigation, signal, reading) {
   if (expectNavigation === 'main-frame') {
-    return await waitForRecordedNavigation(page, navigations, (one) => one.main, signal)
+    return await waitForRecordedNavigation(page, navigations, (one) => one.main, signal, reading)
   }
   if (expectNavigation === 'frame') {
     return await waitForRecordedNavigation(
       page,
       navigations,
       (one) => !one.main && !one.foreign,
-      signal
+      signal,
+      reading
     )
   }
   return await settleWithoutNavigation(page)
@@ -779,13 +745,23 @@ async function settleAfterMount(page, navigations, expectNavigation, signal) {
  * the load the CI runner was under that this is for, which is the same condition that produced the
  * frame-commit race above.
  */
-async function waitForRecordedNavigation(page, navigations, matches, signal) {
+async function waitForRecordedNavigation(page, navigations, matches, signal, reading) {
+  // Sampled while waiting, for the same reason `untilAborted` samples: a reading taken at the abort
+  // can lose its race with vitest's teardown and never reach the log.
+  let latest = 'no reading was taken before the case ended'
+  let since = Date.now()
   while (!navigations.some((one) => matches(one))) {
     if (signal?.aborted) {
       console.error(
-        `[html-preview-render] the arm produced no navigation of the kind it expects; recorded ${JSON.stringify(navigations)}`
+        `[html-preview-render] the arm produced no navigation of the kind it expects; recorded ${JSON.stringify(navigations)}: ${reading?.arm ?? 'arm unknown'} | ${latest}`
       )
       return
+    }
+    if (Date.now() - since > 5000) {
+      since = Date.now()
+      latest = await describePreviewFrame(page, reading?.frame, reading?.browser).catch(
+        (error) => `the reading itself failed: ${String(error).split('\n')[0]}`
+      )
     }
     await page.waitForTimeout(10)
   }
