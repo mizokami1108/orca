@@ -66,6 +66,23 @@ const NATIVE_AUDIO_MODULES_BEHIND_THE_SEAM = 8
 const SESSION_PATHNAME = '/h/[hostId]/session/[worktreeId]'
 const SESSION = 'app/h/[hostId]/session/[worktreeId].tsx'
 
+/**
+ * One closure per route module, built once.
+ *
+ * Every call to `mobileWebAppRouteClosure` is a full esbuild metafile build of the route, and the
+ * cases below ask about six modules across nine of them. Unmemoised this file did fifteen builds and
+ * its CPU tipped two timing-sensitive neighbours in this shard over — a benchmark whose child had
+ * 100 ms to write a pid file, and a census globbing a scratch tree another test was removing. Both
+ * are fragile without this file and neither is reached by it; the load was the difference.
+ */
+const closures = new Map()
+
+function closureOf(routeModule) {
+  const built = closures.get(routeModule) ?? mobileWebAppRouteClosure(routeModule)
+  closures.set(routeModule, built)
+  return built
+}
+
 /** Resolved from `mobile/`, which is the tree the bundler resolves the closure out of: this suite
  *  runs at the repo root, where neither package is installed. */
 function resolveFromMobile(specifier) {
@@ -96,7 +113,7 @@ function dictationGrantsNeeded(closure) {
 async function grantsMissingForRoutes(routes) {
   const missing = []
   for (const route of routes) {
-    const closure = await mobileWebAppRouteClosure(routeModule(route.pathname))
+    const closure = await closureOf(routeModule(route.pathname))
     for (const grant of dictationGrantsNeeded(closure)) {
       if (!route.grants.includes(grant)) {
         missing.push(`${route.pathname} needs ${grant}`)
@@ -116,7 +133,7 @@ describeClosure(
     it('finds the seam in exactly one closure, which is the session route', async () => {
       const reaching = []
       for (const route of MOBILE_WEB_PAGE_ROUTES) {
-        const closure = await mobileWebAppRouteClosure(routeModule(route.pathname))
+        const closure = await closureOf(routeModule(route.pathname))
         if (closure.local.includes(SEAM)) {
           reaching.push(route.pathname)
         }
@@ -125,7 +142,7 @@ describeClosure(
       // Which is why the rule above passes without a grant row moving, and why the control below
       // is what proves the rule can fail at all.
       expect(reaching).toEqual([])
-      const session = await mobileWebAppRouteClosure(SESSION)
+      const session = await closureOf(SESSION)
       expect(session.local).toContain(SEAM)
     })
 
@@ -155,7 +172,7 @@ describeClosure(
     })
 
     it('carries the seam and not the native audio chain it stands in for', async () => {
-      const closure = await mobileWebAppRouteClosure(SESSION)
+      const closure = await closureOf(SESSION)
       expect(closure.local).toContain(SEAM)
       expect(closure.local).not.toContain(NATIVE_SEAM)
       for (const absent of NATIVE_AUDIO_MODULES) {
@@ -174,7 +191,7 @@ describeClosure(
     })
 
     it('is big enough that finding nothing would mean something', async () => {
-      const closure = await mobileWebAppRouteClosure(SESSION)
+      const closure = await closureOf(SESSION)
       // The largest route of the series; a closure that collapsed would pass every rule above by
       // containing nothing to judge.
       expect(closure.local.length).toBeGreaterThan(900)
