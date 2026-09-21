@@ -1012,7 +1012,6 @@ export class SshConnection {
           connectGeneration
         )
         if (val) {
-          this.cachedPassword = val
           const passwordConfig = buildConnectConfig(this.target, resolved, {
             includeAgent: false,
             includePrivateKey: false
@@ -1020,6 +1019,7 @@ export class SshConnection {
           passwordConfig.password = val
           this.respawnProxy(passwordConfig, effectiveProxy)
           await this.doSsh2Connect(passwordConfig, connectGeneration)
+          this.cachedPassword = val
           return
         }
       }

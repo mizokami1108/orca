@@ -574,7 +574,7 @@ describe('SshConnection', () => {
     }
   })
 
-  it('stops after one password failure', async () => {
+  it('stops after one password failure without caching the rejected password', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'orca-ssh-key-'))
     const keyPath = join(tempDir, 'id_ed25519')
     writeFileSync(keyPath, 'encrypted-key')
@@ -597,6 +597,26 @@ describe('SshConnection', () => {
       expect(conn.getState().status).toBe('auth-failed')
       expect(clientInstances).toHaveLength(2)
       expect(onCredentialRequest).toHaveBeenCalledTimes(2)
+
+      ssh2Mock.connectSequence = [
+        new Error('Encrypted private OpenSSH key detected, but no passphrase given'),
+        'ready'
+      ]
+      onCredentialRequest.mockResolvedValueOnce(null).mockResolvedValueOnce('correct-password')
+
+      await conn.connect()
+
+      expect(clientInstances).toHaveLength(4)
+      expect(clientInstances[3].lastConnectConfig).toMatchObject({
+        password: 'correct-password'
+      })
+      expect(onCredentialRequest).toHaveBeenNthCalledWith(
+        4,
+        'target-1',
+        'password',
+        'example.com',
+        expect.any(AbortSignal)
+      )
     } finally {
       rmSync(tempDir, { recursive: true, force: true })
     }
