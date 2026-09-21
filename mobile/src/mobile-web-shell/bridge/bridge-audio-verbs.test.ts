@@ -492,6 +492,33 @@ describe('the wake lock', () => {
     await expect(serve({ active: true, tag: 'orca-c' })).rejects.toBeInstanceOf(Error)
   })
 
+  it('gives back a tag whose activation landed after the session ended', async () => {
+    // The page is a document that can be swiped away mid-dictation, so a dispose can fall between
+    // the activate call and its reply. A tag recorded after that dispose is held by nobody and
+    // keeps the screen awake for the app's lifetime.
+    const held: string[] = []
+    const gate: { release: () => void } = { release: () => {} }
+    const activated = new Promise<void>((resolve) => {
+      gate.release = resolve
+    })
+    const { serve, dispose } = createNativeWakelockServer({
+      activate: async (tag) => {
+        await activated
+        held.push(`+${tag}`)
+      },
+      deactivate: async (tag) => {
+        held.push(`-${tag}`)
+      }
+    })
+    const pending = serve({ active: true, tag: 'orca-late' })
+    dispose()
+    gate.release()
+    // Answered as not held, because by the time the device had it nobody wanted it.
+    await expect(pending).resolves.toEqual({ active: false })
+    await Promise.resolve()
+    expect(held).toEqual(['+orca-late', '-orca-late'])
+  })
+
   it('gives back every tag it still holds when the session ends', async () => {
     const held: string[] = []
     const { serve, dispose } = createNativeWakelockServer({

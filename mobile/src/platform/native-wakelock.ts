@@ -28,11 +28,20 @@ export type NativeWakelockServer = {
 
 export function createNativeWakelockServer(device: WakelockDevice): NativeWakelockServer {
   const held = new Set<string>()
+  let disposed = false
   return {
     serve: async (params) => {
       const { active, tag } = wakelockSetParamsSchema.parse(params)
       if (active) {
         await device.activate(tag)
+        // The session can end between the call and its reply — the page is a document that can be
+        // swiped away mid-dictation — and a tag recorded after that dispose is held by nobody:
+        // `dispose` has already walked the set and nothing will walk it again. So it is given back
+        // here instead, and the page is told it is not held.
+        if (disposed) {
+          void device.deactivate(tag).catch(() => undefined)
+          return { active: false }
+        }
         held.add(tag)
         return { active: true }
       }
@@ -42,6 +51,7 @@ export function createNativeWakelockServer(device: WakelockDevice): NativeWakelo
       return { active: false }
     },
     dispose: () => {
+      disposed = true
       for (const tag of held) {
         // Quiet, for the reason every other dispose here is: this runs while a screen is going
         // away, and a device that would not drop a tag is not something the page can be told about.
