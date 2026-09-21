@@ -260,7 +260,8 @@ async function open(
     sandbox,
     act,
     expectNavigation = null,
-    frameReady = 'artifact'
+    frameReady = 'artifact',
+    signal
   } = {}
 ) {
   const origin = csp === 'shipped' ? origins.shipped : origins.none
@@ -315,7 +316,7 @@ async function open(
     ([html, override]) => window.__mount(html, override),
     [artifact(extra, nonce), sandbox ?? null]
   )
-  await waitForLoadedFrame(page, frameReady)
+  await waitForLoadedFrame(page, frameReady, signal)
   const frames = () => page.frames().filter((frame) => frame !== page.mainFrame())
   // Sampled before the action as well as after: a case that taps a link is asking what the tap
   // produced, and by then the top frame is mid-navigation and the iframe has blanked to its own
@@ -328,7 +329,7 @@ async function open(
   // Every arm settles, acting or not: an artifact can start a navigation with no tap behind it --
   // `<meta http-equiv="refresh">` is one -- and the arms that pin zero were reading their counters
   // while that was still in flight.
-  await settleAfterMount(page, navigations, expectNavigation)
+  await settleAfterMount(page, navigations, expectNavigation, signal)
   const result = {
     page,
     pixelBefore,
@@ -402,8 +403,8 @@ for (const engine of ['chromium', 'webkit']) {
         return one
       }
 
-      it('paints the artifact under the policy the shell already ships', async () => {
-        const read = await open(browser())
+      it('paints the artifact under the policy the shell already ships', async (ctx) => {
+        const read = await open(browser(), { signal: ctx.signal })
         expect(read.frameCount).toBe(1)
         // The artifact is the frame's own document, not something it went and fetched: `srcdoc`
         // carries it and there is no `src` at all. Read from the element rather than from the
@@ -424,7 +425,7 @@ for (const engine of ['chromium', 'webkit']) {
         expect(read.violations).toEqual([])
       }, 120_000)
 
-      it('does not run the artifact, behind two fences either of which would hold', async () => {
+      it('does not run the artifact, behind two fences either of which would hold', async (ctx) => {
         const sealed = await open(browser(), { extra: { body: script() } })
         expect(sealed.pixel).toBe(ARTIFACT_RGB)
         expect(sealed.inside?.ran).toBe(0)
@@ -435,6 +436,7 @@ for (const engine of ['chromium', 'webkit']) {
         // and this very fixture runs. Without this arm, "did not run" is also what an artifact with
         // no script in it reports.
         const loose = await open(browser(), {
+          signal: ctx.signal,
           extra: { body: script() },
           csp: null,
           sandbox: 'allow-scripts allow-top-navigation-by-user-activation',
@@ -452,6 +454,7 @@ for (const engine of ['chromium', 'webkit']) {
         // sandbox attribute alone -- which is what makes the token list below a defence in depth
         // rather than the only thing standing between the page and an agent's script.
         const inherited = await open(browser(), {
+          signal: ctx.signal,
           extra: { body: script() },
           sandbox: 'allow-scripts allow-top-navigation-by-user-activation'
         })
@@ -460,8 +463,8 @@ for (const engine of ['chromium', 'webkit']) {
         expect(inherited.inside?.title).toBe('ARTIFACT')
       }, 180_000)
 
-      it('fetches nothing of the artifact that leaves the origin, and would if allowed', async () => {
-        const sealed = await open(browser())
+      it('fetches nothing of the artifact that leaves the origin, and would if allowed', async (ctx) => {
+        const sealed = await open(browser(), { signal: ctx.signal })
         expect(sealed.pixel).toBe(ARTIFACT_RGB)
         expect(sealed.foreignHits).toEqual([])
         // The control: with no policy the same three subresources are fetched, so the empty list
@@ -473,13 +476,14 @@ for (const engine of ['chromium', 'webkit']) {
         )
       }, 120_000)
 
-      it('asks to navigate the top frame to the shell itself, which the shell must refuse', async () => {
+      it('asks to navigate the top frame to the shell itself, which the shell must refuse', async (ctx) => {
         // `href="/"` resolves against the embedder's base, so this is a request to load the shell's
         // own document -- one tap that would clear the bridge target, restart the load state and
         // lose the page. The browser hands it up like any other, so refusing it is the shell's job
         // and the native tests named above are where that is pinned; what this counts is that the
         // request is real and reaches the shell at all.
         const root = await open(browser(), {
+          signal: ctx.signal,
           expectNavigation: 'main-frame',
           act: async ({ frame }) => {
             await frame?.click('#rootlink', { timeout: 2000 }).catch(() => {})
@@ -491,6 +495,7 @@ for (const engine of ['chromium', 'webkit']) {
 
         // `href=""` is the same navigation spelled as "this document", and it resolves the same way.
         const empty = await open(browser(), {
+          signal: ctx.signal,
           expectNavigation: 'main-frame',
           act: async ({ frame }) => {
             await frame?.click('#emptylink', { timeout: 2000 }).catch(() => {})
@@ -501,8 +506,9 @@ for (const engine of ['chromium', 'webkit']) {
         expect(empty.topNavigations).toBe(0)
       }, 180_000)
 
-      it("hands a user's tap on a link to the top frame, exactly once", async () => {
+      it("hands a user's tap on a link to the top frame, exactly once", async (ctx) => {
         const read = await open(browser(), {
+          signal: ctx.signal,
           expectNavigation: 'main-frame',
           act: async ({ frame }) => {
             await frame?.click('#toplink', { timeout: 2000 }).catch(() => {})
@@ -514,12 +520,13 @@ for (const engine of ['chromium', 'webkit']) {
         expect(read.popups).toBe(0)
       }, 120_000)
 
-      it("cannot reach the shell through a meta refresh at the embedder's own URL", async () => {
+      it("cannot reach the shell through a meta refresh at the embedder's own URL", async (ctx) => {
         // `content="0;url=/"` resolves against the embedder's base, so this is the artifact asking
         // for the shell's own document with no tap behind it. The foreign meta-refresh arm below
         // cannot say anything about that: its URL is off-origin, so its own-origin count is zero
         // whatever the frame did.
         const own = await open(browser(), {
+          signal: ctx.signal,
           extra: { head: '<meta http-equiv="refresh" content="0;url=/">' }
         })
         // The frame is still showing the artifact, so what follows is about a refusal rather than
@@ -537,6 +544,7 @@ for (const engine of ['chromium', 'webkit']) {
         // and this very fixture navigates the frame to the embedder's `/`, so the reading is not
         // blind.
         const loose = await open(browser(), {
+          signal: ctx.signal,
           csp: null,
           sandbox: 'allow-scripts allow-same-origin allow-top-navigation',
           extra: { head: '<meta http-equiv="refresh" content="0;url=/">' },
@@ -553,6 +561,7 @@ for (const engine of ['chromium', 'webkit']) {
         // The token alone: no policy at all, and the navigation never starts, so nothing is served
         // and nothing is reported.
         const tokenOnly = await open(browser(), {
+          signal: ctx.signal,
           csp: null,
           extra: { head: '<meta http-equiv="refresh" content="0;url=/">' }
         })
@@ -567,6 +576,7 @@ for (const engine of ['chromium', 'webkit']) {
         // only in what is left behind: chromium swaps an error page into the frame, WebKit leaves
         // the artifact showing. Neither is asserted; the request never reaching the server is.
         const policyOnly = await open(browser(), {
+          signal: ctx.signal,
           sandbox: 'allow-scripts allow-same-origin allow-top-navigation',
           extra: { head: '<meta http-equiv="refresh" content="0;url=/">' },
           frameReady: 'load'
@@ -576,13 +586,15 @@ for (const engine of ['chromium', 'webkit']) {
         expect(policyOnly.violations.join(' ')).toContain('frame-src')
       }, 180_000)
 
-      it('hands up nothing without a tap, and nothing for a form or a new window', async () => {
+      it('hands up nothing without a tap, and nothing for a form or a new window', async (ctx) => {
         const meta = await open(browser(), {
+          signal: ctx.signal,
           extra: { head: `<meta http-equiv="refresh" content="0;url=${foreignOrigin}/meta.html">` }
         })
         expect(meta.topNavigations).toBe(0)
         expect(meta.ownOriginTopNavigations).toBe(0)
         const form = await open(browser(), {
+          signal: ctx.signal,
           act: async ({ frame }) => {
             await frame?.click('#submit', { timeout: 2000 }).catch(() => {})
           }
@@ -590,6 +602,7 @@ for (const engine of ['chromium', 'webkit']) {
         expect(form.pixelBefore).toBe(ARTIFACT_RGB)
         expect(form.topNavigations).toBe(0)
         const blank = await open(browser(), {
+          signal: ctx.signal,
           act: async ({ frame }) => {
             await frame?.click('#blanklink', { timeout: 2000 }).catch(() => {})
           }
@@ -599,8 +612,9 @@ for (const engine of ['chromium', 'webkit']) {
         expect(blank.popups).toBe(0)
       }, 180_000)
 
-      it('keeps the Preview/Source toggle, and Source shows the source', async () => {
+      it('keeps the Preview/Source toggle, and Source shows the source', async (ctx) => {
         const read = await open(browser(), {
+          signal: ctx.signal,
           act: async ({ page }) => {
             await page.getByLabel('View HTML source').click({ timeout: 2000 })
           }
@@ -662,7 +676,7 @@ describe('the HTML preview needs no policy change', () => {
  * had. `'load'` is for the one arm whose artifact deliberately navigates the frame somewhere else,
  * where no marker is ever coming.
  */
-async function waitForLoadedFrame(page, frameReady = 'artifact') {
+async function waitForLoadedFrame(page, frameReady = 'artifact', signal) {
   const element = await page.waitForSelector('iframe', { timeout: 0 })
   const frame = await element.contentFrame()
   if (!frame) {
@@ -670,28 +684,51 @@ async function waitForLoadedFrame(page, frameReady = 'artifact') {
   }
   await frame.waitForLoadState('load').catch(() => {})
   if (frameReady === 'script') {
-    await frame
-      .waitForFunction(() => window.__ran === 1, undefined, { timeout: 20_000 })
-      .catch(async (error) => {
-        throw new Error(
-          `the artifact's script never ran inside the frame (${await describeFrame(page, frame)}): ${String(error).split('\n')[0]}`
-        )
-      })
+    await untilAborted(
+      frame.waitForFunction(() => window.__ran === 1, undefined, { timeout: 0 }),
+      signal,
+      async () =>
+        `the artifact's script never ran inside the frame (${await describeFrame(page, frame)})`
+    )
   }
   if (frameReady !== 'load') {
-    // Bounded well inside the case's timeout, and the bound is for the message. The runner's Chrome
-    // read this frame's URL as empty where three chromium builds here read `about:srcdoc`, and the
-    // difference is not reproducible locally, so a frame that never becomes ready has to say what it
-    // did report rather than spend the case in silence.
-    await frame
-      .waitForSelector('#marker', { state: 'attached', timeout: 20_000 })
-      .catch(async (error) => {
-        throw new Error(
-          `the artifact never parsed inside the frame (${await describeFrame(page, frame)}): ${String(error).split('\n')[0]}`
-        )
-      })
+    await untilAborted(
+      frame.waitForSelector('#marker', { state: 'attached', timeout: 0 }),
+      signal,
+      async () => `the artifact never parsed inside the frame (${await describeFrame(page, frame)})`
+    )
   }
   return frame
+}
+
+/**
+ * A wait bounded by the case's own timeout and by nothing else.
+ *
+ * `ctx.signal` aborts when vitest times a case out, so no number in here races the one the case
+ * declares. On abort the rig prints what the frame reported -- the reading that tells a frame the
+ * policy refused from one that was merely slow, which is what CI's chromium timeouts could not say.
+ * Nothing is rethrown: a rejection raised after vitest has given up on a case has nobody left to
+ * catch it, and an unhandled one fails a run whose every test passed.
+ */
+async function untilAborted(wait, signal, describe) {
+  await Promise.race([
+    wait,
+    new Promise((resolve) => {
+      if (!signal) {
+        return
+      }
+      const report = async () => {
+        const reading = await describe().catch(() => 'no reading available')
+        console.error(`[html-preview-render] ${reading}`)
+        resolve()
+      }
+      if (signal.aborted) {
+        void report()
+        return
+      }
+      signal.addEventListener('abort', () => void report(), { once: true })
+    })
+  ]).catch(() => {})
 }
 
 /** What a frame that never became ready did report, which is the whole diagnosis on a runner. */
@@ -714,12 +751,17 @@ async function describeFrame(page, frame) {
  * record itself rather than for a clock. An arm that expects none has nothing to await, so it takes
  * the bounded path below.
  */
-async function settleAfterMount(page, navigations, expectNavigation) {
+async function settleAfterMount(page, navigations, expectNavigation, signal) {
   if (expectNavigation === 'main-frame') {
-    return await waitForRecordedNavigation(page, navigations, (one) => one.main)
+    return await waitForRecordedNavigation(page, navigations, (one) => one.main, signal)
   }
   if (expectNavigation === 'frame') {
-    return await waitForRecordedNavigation(page, navigations, (one) => !one.main && !one.foreign)
+    return await waitForRecordedNavigation(
+      page,
+      navigations,
+      (one) => !one.main && !one.foreign,
+      signal
+    )
   }
   return await settleWithoutNavigation(page)
 }
@@ -727,21 +769,23 @@ async function settleAfterMount(page, navigations, expectNavigation) {
 /**
  * The moment the arm's navigation exists, for an arm that expects one.
  *
- * No clock on the way through: the route handler above records a main-frame navigation as the browser
- * dispatches it, so the oracles are read after the thing under test rather than after a wait. The
- * deadline is the failure path only, and it is there for the message -- an arm whose click missed its
- * target says so here instead of spending the case's whole timeout.
+ * No clock at all: the route handler above records a main-frame navigation as the browser dispatches
+ * it, so the oracles are read after the thing under test rather than after a wait, and the only
+ * bound is the case's own timeout through `ctx.signal`. An arm whose click missed its target prints
+ * what it did record and lets the case fail as the timeout it is.
  *
  * Measured, so it is not sold as more than it is: with this replaced by a no-op every arm still
  * passes, because the reads that follow are each a round trip and the record lands during them. It is
  * the load the CI runner was under that this is for, which is the same condition that produced the
  * frame-commit race above.
  */
-async function waitForRecordedNavigation(page, navigations, matches) {
-  const deadline = Date.now() + 15_000
+async function waitForRecordedNavigation(page, navigations, matches, signal) {
   while (!navigations.some((one) => matches(one))) {
-    if (Date.now() > deadline) {
-      throw new Error('the arm produced no navigation of the kind it expects')
+    if (signal?.aborted) {
+      console.error(
+        `[html-preview-render] the arm produced no navigation of the kind it expects; recorded ${JSON.stringify(navigations)}`
+      )
+      return
     }
     await page.waitForTimeout(10)
   }
