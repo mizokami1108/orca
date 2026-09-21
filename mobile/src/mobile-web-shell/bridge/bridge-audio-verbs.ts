@@ -71,6 +71,22 @@ export const BRIDGE_AUDIO_INTERRUPTIONS = ['began', 'ended', 'blocked'] as const
 
 export type BridgeAudioInterruption = (typeof BRIDGE_AUDIO_INTERRUPTIONS)[number]
 
+/**
+ * Whether an interruption is the OS taking the capture away, rather than handing it back.
+ *
+ * `began` and `blocked` end it; `ended` on its own does not — that is the OS returning the session
+ * after, say, a notification chime, and a dictation that cancelled on it would end itself the
+ * moment the chime finished. One predicate because three places decide it: the shell, which stops
+ * filling its ring; the native seam, which raises it off `onAudioInterruption`; and the page, which
+ * raises it off a `read` reply. Two of them had drifted apart.
+ *
+ * Takes a string rather than the union, because the native engines hand over whatever they emit and
+ * a kind this build has no name for is not an interruption it can describe.
+ */
+export function bridgeAudioInterruptionEndsCapture(kind: string): boolean {
+  return kind === 'began' || kind === 'blocked'
+}
+
 /** The longest wake tag the shell will hold. The dictation tag is the owner id and the dictation id
  *  joined, both minted from a clock and a random suffix, so this is roughly twice the longest one
  *  this build can produce and short enough that a page cannot park text in the shell's tag set. */

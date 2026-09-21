@@ -6,6 +6,7 @@ import {
   toggleRecording
 } from '@orca/expo-two-way-audio'
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
+import { bridgeAudioInterruptionEndsCapture } from '../mobile-web-shell/bridge/bridge-audio-verbs'
 import type { DictationCapture } from './dictation-capture-contract'
 
 /**
@@ -45,7 +46,7 @@ const nativeDictationCapture: DictationCapture = {
     }),
   onInterruption: (handler) =>
     addExpoTwoWayAudioEventListener('onAudioInterruption', (event) => {
-      if (event.data === 'began' || event.data === 'blocked') {
+      if (bridgeAudioInterruptionEndsCapture(event.data)) {
         handler()
       }
     }),

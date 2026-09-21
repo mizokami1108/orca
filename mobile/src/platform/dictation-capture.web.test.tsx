@@ -323,6 +323,30 @@ describe('a capture the page loses', () => {
     expect(interrupted).toBe(1)
   })
 
+  it('does not end a live capture for an interruption that only ended', async () => {
+    // The native seam gates on `began` and `blocked`; the page must gate on the same two, or a
+    // notification chime finishing cancels a dictation on the page and nothing natively.
+    const shell = createAudioShell()
+    const pair = createFakeBridgePortPair({ serveNativeVerb: shell.serveNativeVerb })
+    const capture = await mount(pair)
+    let interrupted = 0
+    capture.onInterruption(() => {
+      interrupted += 1
+    })
+    await capture.open()
+    capture.begin()
+    shell.interrupt('ended')
+    await tick(pair)
+    expect(interrupted).toBe(0)
+    // And the drain is still running, so the capture really did survive it.
+    const before = shell.calls.length
+    await tick(pair)
+    expect(shell.calls.length).toBeGreaterThan(before)
+    shell.interrupt('blocked')
+    await tick(pair)
+    expect(interrupted).toBe(1)
+  })
+
   it('reaches the same lane when the shell refuses the read', async () => {
     const shell = createAudioShell({
       refuse: (verb) =>

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import {
   BRIDGE_AUDIO_RING_MAX_BYTES,
+  bridgeAudioInterruptionEndsCapture,
   type BridgeAudioChunk
 } from '../mobile-web-shell/bridge/bridge-audio-verbs'
 import { useNativeVerbs, type NativeVerbs } from '../mobile-web-shell/bridge/use-native-verbs'
@@ -102,7 +103,13 @@ export function createPageDictationCapture(
         handler(chunk)
       }
     }
-    if (reply.interruption !== null || !reply.recording) {
+    // The same two kinds the native seam ends on: an `ended` on its own is the OS handing the
+    // session back and leaves a live capture alone. `recording` is the shell's own state and ends
+    // it whatever the kind — a capture it no longer has is gone however it went.
+    if (
+      !reply.recording ||
+      (reply.interruption !== null && bridgeAudioInterruptionEndsCapture(reply.interruption))
+    ) {
       interrupted()
     }
   }

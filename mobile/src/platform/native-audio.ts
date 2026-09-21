@@ -1,5 +1,6 @@
 import {
   BRIDGE_AUDIO_RING_MAX_BYTES,
+  bridgeAudioInterruptionEndsCapture,
   audioReadParamsSchema,
   audioStartParamsSchema,
   audioStopParamsSchema,
@@ -157,10 +158,9 @@ export function createNativeAudioCapture(engine: NativeAudioEngine): NativeAudio
         return
       }
       capture.interruption = kind
-      // `ended` is the OS handing the session back, which this build does not resume: the page's
-      // own flow cancels on `began` and `blocked`, and a capture it has given up on must not start
-      // filling the ring again behind it.
-      if (kind !== 'ended') {
+      // A capture the page has given up on must not go on filling the ring behind it. The rule is
+      // the seam's own, so the shell, the device and the page all end on the same two kinds.
+      if (bridgeAudioInterruptionEndsCapture(kind)) {
         capture.recording = false
       }
     })

@@ -295,6 +295,25 @@ describe('the shell capture', () => {
     expect(next.interruption).toBeNull()
   })
 
+  it('keeps a capture the OS handed back, and ends the two it took away', async () => {
+    const { engine, interrupt } = createTestEngine()
+    const capture = createNativeAudioCapture(engine)
+    await capture.serve('native.audio.start', { sampleRate: 16_000 })
+    interrupt('ended')
+    const kept = audioReadResultSchema.parse(
+      await capture.serve('native.audio.read', { maxBytes: BRIDGE_AUDIO_RING_MAX_BYTES })
+    )
+    // The kind still crosses — the page is told what happened — but the capture is still live, so
+    // the ring goes on filling and the page goes on draining it.
+    expect(kept.interruption).toBe('ended')
+    expect(kept.recording).toBe(true)
+    interrupt('blocked')
+    const lost = audioReadResultSchema.parse(
+      await capture.serve('native.audio.read', { maxBytes: BRIDGE_AUDIO_RING_MAX_BYTES })
+    )
+    expect(lost.recording).toBe(false)
+  })
+
   it('refuses a read once the page has stopped', async () => {
     const { engine } = createTestEngine()
     const capture = createNativeAudioCapture(engine)
@@ -357,9 +376,9 @@ describe('the shell capture', () => {
     // capture rather than refusing one — and both starts then reach `listen()`. The second
     // overwriting the first left the first's handlers subscribed for the app's lifetime, so the
     // engine kept filling a ring nobody could read and `dispose` freed one of two.
-    let release: (() => void) | null = null
+    const prompt: { release: () => void } = { release: () => {} }
     const gate = new Promise<void>((resolve) => {
-      release = resolve
+      prompt.release = resolve
     })
     const { engine, log, liveListeners } = createTestEngine({
       permission: async () => {
@@ -370,7 +389,7 @@ describe('the shell capture', () => {
     const capture = createNativeAudioCapture(engine)
     const first = capture.serve('native.audio.start', { sampleRate: 16_000 })
     const second = capture.serve('native.audio.start', { sampleRate: 16_000 })
-    release?.()
+    prompt.release()
     await expect(first).resolves.toMatchObject({ started: true })
     await expect(second).resolves.toMatchObject({ started: true })
     expect(liveListeners()).toEqual({ microphone: 1, interruptions: 1 })
@@ -381,9 +400,9 @@ describe('the shell capture', () => {
   })
 
   it('does not open a capture for a start that lands after the session ended', async () => {
-    let release: (() => void) | null = null
+    const prompt: { release: () => void } = { release: () => {} }
     const gate = new Promise<void>((resolve) => {
-      release = resolve
+      prompt.release = resolve
     })
     const { engine, liveListeners } = createTestEngine({
       permission: async () => {
@@ -394,15 +413,15 @@ describe('the shell capture', () => {
     const capture = createNativeAudioCapture(engine)
     const pending = capture.serve('native.audio.start', { sampleRate: 16_000 })
     capture.dispose()
-    release?.()
+    prompt.release()
     await expect(pending).resolves.toMatchObject({ started: false })
     expect(liveListeners()).toEqual({ microphone: 0, interruptions: 0 })
   })
 
   it('ends a capture a stop asked for while its start was still opening', async () => {
-    let release: (() => void) | null = null
+    const prompt: { release: () => void } = { release: () => {} }
     const gate = new Promise<void>((resolve) => {
-      release = resolve
+      prompt.release = resolve
     })
     const { engine, liveListeners } = createTestEngine({
       permission: async () => {
@@ -413,7 +432,7 @@ describe('the shell capture', () => {
     const capture = createNativeAudioCapture(engine)
     const started = capture.serve('native.audio.start', { sampleRate: 16_000 })
     const stopped = capture.serve('native.audio.stop', {})
-    release?.()
+    prompt.release()
     await started
     // The stop runs after the start it followed, so it ends the capture that start opened rather
     // than finding nothing and leaving a live microphone behind it.
