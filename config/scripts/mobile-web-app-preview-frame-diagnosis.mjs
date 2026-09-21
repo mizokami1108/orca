@@ -24,14 +24,13 @@ export async function untilAborted(wait, signal, describe) {
   let latest = 'no reading was taken before the case ended'
   let sampling = true
   const sample = async () => {
+    // Once at the start and then every five seconds, so a case that ends early still has a reading to
+    // print. A wait that only ever prints "no reading was taken" tells nobody anything.
     while (sampling) {
-      await new Promise((resolve) => setTimeout(resolve, 5000))
-      if (!sampling) {
-        return
-      }
       latest = await describe().catch(
         (error) => `the reading itself failed: ${String(error).split('\n')[0]}`
       )
+      await new Promise((resolve) => setTimeout(resolve, 5000))
     }
   }
   void sample()
@@ -46,7 +45,9 @@ export async function untilAborted(wait, signal, describe) {
         resolve()
       }
       if (signal.aborted) {
-        report()
+        // Silent: the case was already over when this wait began, so it has nothing of its own to
+        // report and the wait that did time out has already printed its reading.
+        resolve()
         return
       }
       signal.addEventListener('abort', report, { once: true })
@@ -71,7 +72,7 @@ export async function untilAborted(wait, signal, describe) {
  * page's init script installs the same collector in every frame, measured on both engines, so each
  * frame has its own array to report.
  */
-export async function describePreviewFrame(page, frame, browser) {
+export async function describePreviewFrame(page, frame, browserVersion) {
   const host = await page
     .evaluate(() => {
       const element = document.querySelector('iframe')
@@ -107,7 +108,7 @@ export async function describePreviewFrame(page, frame, browser) {
     )
   }
   return [
-    `browser ${browser?.version() ?? 'unknown'}`,
+    `browser ${browserVersion ?? 'unknown'}`,
     `awaited frame url ${JSON.stringify(frame?.url() ?? null)}`,
     `host ${JSON.stringify(host)}`,
     `frames [${frames.join(' ;; ')}]`

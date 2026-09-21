@@ -61,9 +61,8 @@ window.__mount = (html, sandboxOverride) => {
     })
   )
   // A control arm needs a frame the product would never build -- one with allow-scripts -- so that
-  // "the script did not run" can be told apart from "the fixture has no script". Applied after the
-  // render rather than through a prop, because the product takes no such prop and must not grow one
-  // for a test. React does not own this attribute, so it stays put.
+  // "the script did not run" can be told apart from "the fixture has no script". Built here rather
+  // than through a prop, because the product takes no such prop and must not grow one for a test.
   //
   // Awaited rather than read straight away: createRoot().render() commits on React's own schedule,
   // and reading the element synchronously finds nothing.
@@ -77,12 +76,19 @@ window.__mount = (html, sandboxOverride) => {
     const apply = () => {
       const frame = host.querySelector('iframe')
       if (frame) {
-        frame.setAttribute('sandbox', sandboxOverride)
-        // Resolved on the document this assignment commits, not on the assignment: the frame already
-        // holds one loaded under the product's own token, and an arm that read that one would report
-        // the sealed behaviour under a name that says otherwise.
-        frame.addEventListener('load', () => resolve(), { once: true })
-        frame.srcdoc = html
+        // A new element rather than the live one relaxed, because a live frame cannot be relaxed:
+        // sandbox flags are fixed on a browsing context when it is created, and Chrome 152 keeps the
+        // original ones through a srcdoc reassignment while still parsing the new document. An arm
+        // that ran on such a frame reports the sealed behaviour under a widened name and passes for
+        // the wrong reason, which is exactly what CI read while Chromium 147 here honoured the
+        // relaxation. The clone gets its own context from creation, the way the product does it:
+        // React sets the attribute before the element is inserted, and never afterwards.
+        const widened = frame.cloneNode(false)
+        widened.setAttribute('sandbox', sandboxOverride)
+        widened.srcdoc = html
+        // Resolved on the document the insertion commits, not on the insertion.
+        widened.addEventListener('load', () => resolve(), { once: true })
+        frame.replaceWith(widened)
         return
       }
       if (Date.now() > deadline) {
@@ -268,6 +274,9 @@ async function open(
   const origin = csp === 'shipped' ? origins.shipped : origins.none
   nonceCounter += 1
   const nonce = `n${String(nonceCounter)}`
+  // Read here and carried as a string: asked for at the abort it lost its race with teardown and
+  // printed "browser unknown" in the CI log this diagnostic exists for.
+  const browserVersion = browser.version()
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } })
   const navigations = []
   const popups = []
@@ -319,7 +328,7 @@ async function open(
   )
   // Named in every diagnostic, because the log shows the case and not which of its arms spoke.
   const arm = `arm csp=${csp} sandbox=${sandbox ?? 'product'} frameReady=${frameReady} nonce=${nonce}`
-  const artifactFrame = await waitForLoadedFrame(page, frameReady, signal, browser, arm)
+  const artifactFrame = await waitForLoadedFrame(page, frameReady, signal, browserVersion, arm)
   const frames = () => page.frames().filter((frame) => frame !== page.mainFrame())
   // Sampled before the action as well as after: a case that taps a link is asking what the tap
   // produced, and by then the top frame is mid-navigation and the iframe has blanked to its own
@@ -334,7 +343,7 @@ async function open(
   // while that was still in flight.
   await settleAfterMount(page, navigations, expectNavigation, signal, {
     frame: artifactFrame,
-    browser,
+    browserVersion,
     arm
   })
   const result = {
@@ -377,7 +386,10 @@ async function open(
         marker: document.getElementById('marker')?.textContent ?? null,
         title: document.title,
         ran: window.__ran ?? 0,
-        threw: window.__threw ?? null
+        threw: window.__threw ?? null,
+        // The frame's own list, not the embedder's: `securitypolicyviolation` does not cross frames,
+        // and the page's init script installs the same collector in every one.
+        violations: window.__violations ?? null
       }))
       .catch(() => null) ?? Promise.resolve(null)),
     topNavigations: navigations.filter((one) => one.main && one.foreign).length,
@@ -454,6 +466,8 @@ for (const engine of ['chromium', 'webkit']) {
         expect(loose.pixel).toBe(ARTIFACT_RGB)
         expect(loose.inside?.ran).toBe(1)
         expect(loose.inside?.title).toBe('SCRIPT_RAN')
+        // Nothing refused it, which is what "no policy" looks like from inside the frame.
+        expect(loose.inside?.violations).toEqual([])
 
         // The second fence, measured on its own: grant `allow-scripts` and keep the shipped policy,
         // and the script still does not run, because a `srcdoc` frame inherits its embedder's
@@ -468,6 +482,15 @@ for (const engine of ['chromium', 'webkit']) {
         expect(inherited.pixel).toBe(ARTIFACT_RGB)
         expect(inherited.inside?.ran).toBe(0)
         expect(inherited.inside?.title).toBe('ARTIFACT')
+        // This arm's own precondition, and the thing CI showed a rig can get wrong: a frame that was
+        // never really widened refuses the script too, silently and with no event, and would pass
+        // every line above under a name that says the policy held. A violation raised inside the
+        // frame can only happen if the sandbox let the script start, so this is the reading that
+        // separates the two -- and it is the frame's own list, since the embedder's never sees it.
+        expect(String(inherited.inside?.violations)).toContain('script-src')
+        // The sealed arm is the contrast: no policy refused anything there, the sandbox simply never
+        // let the script begin.
+        expect(sealed.inside?.violations).toEqual([])
       }, 180_000)
 
       it('fetches nothing of the artifact that leaves the origin, and would if allowed', async (ctx) => {
@@ -683,7 +706,7 @@ describe('the HTML preview needs no policy change', () => {
  * had. `'load'` is for the one arm whose artifact deliberately navigates the frame somewhere else,
  * where no marker is ever coming.
  */
-async function waitForLoadedFrame(page, frameReady = 'artifact', signal, browser, arm) {
+async function waitForLoadedFrame(page, frameReady = 'artifact', signal, browserVersion, arm) {
   const element = await page.waitForSelector('iframe', { timeout: 0 })
   const frame = await element.contentFrame()
   if (!frame) {
@@ -695,7 +718,7 @@ async function waitForLoadedFrame(page, frameReady = 'artifact', signal, browser
       frame.waitForFunction(() => window.__ran === 1, undefined, { timeout: 0 }),
       signal,
       async () =>
-        `the artifact's script never ran inside the frame (${await describePreviewFrame(page, frame)})`
+        `the artifact's script never ran inside the frame: ${arm} | ${await describePreviewFrame(page, frame, browserVersion)}`
     )
   }
   if (frameReady !== 'load') {
@@ -703,7 +726,7 @@ async function waitForLoadedFrame(page, frameReady = 'artifact', signal, browser
       frame.waitForSelector('#marker', { state: 'attached', timeout: 0 }),
       signal,
       async () =>
-        `the artifact never parsed inside the frame: ${arm} | ${await describePreviewFrame(page, frame, browser)}`
+        `the artifact never parsed inside the frame: ${arm} | ${await describePreviewFrame(page, frame, browserVersion)}`
     )
   }
   return frame
@@ -759,7 +782,7 @@ async function waitForRecordedNavigation(page, navigations, matches, signal, rea
     }
     if (Date.now() - since > 5000) {
       since = Date.now()
-      latest = await describePreviewFrame(page, reading?.frame, reading?.browser).catch(
+      latest = await describePreviewFrame(page, reading?.frame, reading?.browserVersion).catch(
         (error) => `the reading itself failed: ${String(error).split('\n')[0]}`
       )
     }
