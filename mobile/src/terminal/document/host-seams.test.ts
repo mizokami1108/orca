@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTerminalDocumentScope, type TerminalDocumentScope } from './document-scope'
-import { startTerminalDocument } from './create-terminal-document'
+import { startTerminalDocument, stopTerminalDocument } from './create-terminal-document'
 import { handleMsg } from './host-message-router'
 import { notify } from './host-notify'
 import { flog } from './viewport-transform'
@@ -38,6 +38,16 @@ const SURFACE_MARKUP =
  * `selection-state-and-eviction` read are read in the one order both hosts run them in, and a
  * module added to that sequence is covered here without this file being edited.
  */
+/**
+ * Every document a case started, so `afterEach` can stop them.
+ *
+ * A start installs six listeners on `document` and `window` — the dispatcher's four capture-phase
+ * touch handlers, the fit's resize and the recovery's visibilitychange — and they are page-wide by
+ * nature, so a document nobody stopped keeps answering events in the next case with a scope that
+ * case knows nothing about, and calls that case's host hooks.
+ */
+const startedScopes: TerminalDocumentScope[] = []
+
 function startedScope(host: TerminalDocumentHost = {}): TerminalDocumentScope {
   document.body.innerHTML = SURFACE_MARKUP
   // The two the sequence itself would otherwise answer with the window: a transport that installs
@@ -49,6 +59,7 @@ function startedScope(host: TerminalDocumentHost = {}): TerminalDocumentScope {
     ...host
   })
   startTerminalDocument(scope)
+  startedScopes.push(scope)
   return scope
 }
 
@@ -102,6 +113,11 @@ function terminalDouble() {
 }
 
 afterEach(() => {
+  // Before the globals go back: a stop reads the scope's own seams, and one of them is a window
+  // read a case may have stubbed.
+  while (startedScopes.length > 0) {
+    stopTerminalDocument(startedScopes.pop()!)
+  }
   vi.unstubAllGlobals()
 })
 
