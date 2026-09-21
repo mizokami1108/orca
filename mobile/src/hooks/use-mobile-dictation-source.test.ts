@@ -274,6 +274,14 @@ describe('useMobileDictation source invariants', () => {
     expect(catchIndex).toBeGreaterThan(toggleIndex)
     expect(catchIndex).toBeLessThan(releaseIndex)
 
+    // The try above is not what makes this true, and this case used to claim it was. `end` is
+    // async, so a throwing binding rejects rather than throwing, and a synchronous `catch` around
+    // `void capture.end()` never sees it. The guard is the seam swallowing its own failure, which
+    // `dictation-capture.test.ts` drives against an engine that will not stop; the try stays for a
+    // seam that throws synchronously.
+    expect(nativeCaptureSource).toContain("console.error('Failed to stop microphone recording'")
+    expect(nativeCaptureSource).toContain("console.error('Failed to tear down the audio session'")
+
     // stop()'s recording shutdown sits inside the try so a native throw still
     // runs the finally release and error cleanup.
     const stopBody = sliceBetween('const stop = useCallback(async () => {', 'const cancel =')

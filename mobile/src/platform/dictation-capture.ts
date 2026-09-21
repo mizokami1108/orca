@@ -26,13 +26,30 @@ const nativeDictationCapture: DictationCapture = {
     return (await initialize()) ? { ok: true } : { ok: false, reason: 'unavailable' }
   },
   begin: () => toggleRecording(true),
-  // Already resolved: every microphone event reached the hook as the engine produced it, so there
-  // is nothing held back for a stop to hand over.
+  /**
+   * Already resolved: every microphone event reached the hook as the engine produced it, so there
+   * is nothing held back for a stop to hand over.
+   *
+   * And it never rejects, which the contract promises because of how it is called: every site
+   * reaches it as `void capture.end()` inside a synchronous `try`, which cannot see a rejection. A
+   * binding that threw left an unhandled rejection rather than a logged failure, so the throw is
+   * swallowed here where there is somewhere to log it.
+   */
   end: async () => {
-    toggleRecording(false)
+    try {
+      toggleRecording(false)
+    } catch (error) {
+      console.error('Failed to stop microphone recording', error)
+    }
   },
+  /** Same reason, and a sharper one: this runs bare in the unmount path, where a throw would take
+   *  the rest of the cleanup — the wake tag and the desktop's cancel — with it. */
   release: () => {
-    void tearDown()
+    try {
+      tearDown()
+    } catch (error) {
+      console.error('Failed to tear down the audio session', error)
+    }
   },
   onChunk: (handler) =>
     addExpoTwoWayAudioEventListener('onMicrophoneData', (event) => {

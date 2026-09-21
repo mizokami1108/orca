@@ -10,7 +10,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const engine = vi.hoisted(() => ({
   listeners: new Map<string, (event: { data: unknown }) => void>(),
-  calls: new Array<string>()
+  calls: new Array<string>(),
+  /** Set by a case that wants the JSI binding to fail the way a device can. */
+  throwOn: new Set<string>()
 }))
 
 vi.mock('@orca/expo-two-way-audio', () => ({
@@ -32,9 +34,15 @@ vi.mock('@orca/expo-two-way-audio', () => ({
   },
   tearDown: () => {
     engine.calls.push('tearDown')
+    if (engine.throwOn.has('tearDown')) {
+      throw new Error('the audio session would not tear down')
+    }
   },
   toggleRecording: (on: boolean) => {
     engine.calls.push(`toggleRecording(${String(on)})`)
+    if (engine.throwOn.has(`toggleRecording(${String(on)})`)) {
+      throw new Error('the audio engine would not stop')
+    }
     return true
   }
 }))
@@ -54,6 +62,7 @@ import { useDictationCapture } from './dictation-capture'
 beforeEach(() => {
   engine.listeners.clear()
   engine.calls.length = 0
+  engine.throwOn.clear()
 })
 
 describe('which interruptions end a native capture', () => {
@@ -109,5 +118,35 @@ describe('the calls the native half makes', () => {
     await capture.keepAwake.activate('orca-a')
     await capture.keepAwake.deactivate('orca-a')
     expect(engine.calls).toEqual(['+orca-a', '-orca-a'])
+  })
+})
+
+describe('a device whose audio session will not shut down', () => {
+  it('resolves `end` rather than rejecting it, which the contract promises', async () => {
+    // `end` is async, so a throw from the binding becomes a rejection. Every caller reaches it as
+    // `void capture.end()` inside a synchronous try/catch, which cannot see a rejection — so the
+    // failure left the app with an unhandled rejection instead of a logged one, and the cleanup
+    // that was meant to keep going was never the thing at risk.
+    engine.throwOn.add('toggleRecording(false)')
+    const capture = useDictationCapture()
+    await expect(capture.end()).resolves.toBeUndefined()
+    expect(engine.calls).toEqual(['toggleRecording(false)'])
+  })
+
+  it('does not throw out of `release`, which runs bare in the unmount path', async () => {
+    engine.throwOn.add('tearDown')
+    const capture = useDictationCapture()
+    expect(() => capture.release()).not.toThrow()
+    await Promise.resolve()
+    expect(engine.calls).toEqual(['tearDown'])
+  })
+
+  it('still stops the engine when the tear-down is the half that fails', async () => {
+    engine.throwOn.add('tearDown')
+    const capture = useDictationCapture()
+    await capture.end()
+    capture.release()
+    await Promise.resolve()
+    expect(engine.calls).toEqual(['toggleRecording(false)', 'tearDown'])
   })
 })
