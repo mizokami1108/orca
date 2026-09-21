@@ -404,7 +404,7 @@ describe('the shell capture', () => {
     const gate = new Promise<void>((resolve) => {
       prompt.release = resolve
     })
-    const { engine, liveListeners } = createTestEngine({
+    const { engine, liveListeners, log } = createTestEngine({
       permission: async () => {
         await gate
         return 'granted'
@@ -415,6 +415,35 @@ describe('the shell capture', () => {
     capture.dispose()
     prompt.release()
     await expect(pending).resolves.toMatchObject({ started: false })
+    expect(liveListeners()).toEqual({ microphone: 0, interruptions: 0 })
+    // And the device is left torn down. The open succeeded — on a phone that is `initialize()`
+    // bringing the audio session up — so a start that simply returned here would leave it up with
+    // nothing holding it: the local end is a no-op with no capture, and nobody else will call one.
+    expect(log).toContain('end')
+  })
+
+  it('tears the device down for a start that lost the race after opening', async () => {
+    const prompt: { release: () => void } = { release: () => {} }
+    const gate = new Promise<void>((resolve) => {
+      prompt.release = resolve
+    })
+    // The race lost after the permission, inside the open itself, which is the longer of the two.
+    const { engine, log, liveListeners } = createTestEngine({
+      open: async (sampleRate) => {
+        await gate
+        return { opened: true, sampleRate }
+      }
+    })
+    const capture = createNativeAudioCapture(engine)
+    const pending = capture.serve('native.audio.start', { sampleRate: 16_000 })
+    capture.dispose()
+    prompt.release()
+    await expect(pending).resolves.toEqual({
+      started: false,
+      sampleRate: 16_000,
+      permission: 'granted'
+    })
+    expect(log.filter((entry) => entry === 'end')).toHaveLength(1)
     expect(liveListeners()).toEqual({ microphone: 0, interruptions: 0 })
   })
 

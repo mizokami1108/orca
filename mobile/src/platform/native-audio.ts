@@ -191,7 +191,11 @@ export function createNativeAudioCapture(engine: NativeAudioEngine): NativeAudio
     }
     // The session can end while the device is still opening. Nothing subscribes after that: the
     // dispose has already run, and a capture opened behind it would have no owner to stop it.
+    // The open succeeded though — on a phone that is `initialize()` bringing the audio session up —
+    // so it is torn down here. `end()` below is a no-op with no capture, and nobody else will call
+    // one, so simply returning would leave the device's session up for the life of the app.
     if (disposed) {
+      engine.end()
       return { started: false, sampleRate: opened.sampleRate, permission }
     }
     capture = listen()
