@@ -24,11 +24,11 @@ import {
  *   modules        4324 -> 4284   (-40)
  *   local modules   974 ->  934   (-40)
  *
- * The extra module is `src/mobile-web-shell/bridge/bridge-haptics-notify.ts`, which C7.10 item E
- * put on the session route after the +3 below was recorded, so main itself reads 4324 against the
- * 4323 it holds and #21908 re-pins it there. It is in this branch's 4284 for the same reason and
- * by the same route, not as anything this branch did: `haptics.web.ts` was already in the closure
- * and the bridge module joins it.
+ * The extra module is `src/mobile-web-shell/bridge/bridge-haptics-notify.ts`, which
+ * `haptics.web.ts` reaches. C7.10 item E (#21864) and mermaid (#21871) were each green against a
+ * main that lacked the other, so main held 4323 while measuring 4324, and #21908 re-pinned it
+ * there. It is in this branch's 4284 by that same route rather than by anything this branch did:
+ * `haptics.web.ts` was already in the closure and the bridge module joins it.
  *
  * Which is the point of re-measuring rather than summing. A merged number arrived at as
  * -40 plus +3 would have read 4283 and been wrong about a module neither side of the merge moved.
@@ -136,10 +136,9 @@ const MERMAID_PAGE_ENGINE = 'src/components/pr-sidebar/mermaid-page-engine.gener
 const MERMAID_PACKAGE = 'node_modules/mermaid/'
 
 /**
- * The module list on the merge, recorded at the base in the docstring above.
- *
- * It carries both effects at once -- the factory replacing the document's source modules and
- * mermaid's three -- which is why it is neither side's own number.
+ * The module list on the merge, recorded at the base in the docstring above, which is where the
+ * three things inside it are accounted for: the factory replacing the document's source modules,
+ * mermaid's three, and the haptics notify module #21908 pins on main.
  */
 const SESSION_ROUTE_MODULES = 4284
 
