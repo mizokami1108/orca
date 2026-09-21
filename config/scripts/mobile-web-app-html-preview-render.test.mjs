@@ -260,7 +260,7 @@ async function open(
     sandbox,
     act,
     expectNavigation = null,
-    expectArtifactInFrame = true
+    frameReady = 'artifact'
   } = {}
 ) {
   const origin = csp === 'shipped' ? origins.shipped : origins.none
@@ -315,7 +315,7 @@ async function open(
     ([html, override]) => window.__mount(html, override),
     [artifact(extra, nonce), sandbox ?? null]
   )
-  await waitForLoadedFrame(page, expectArtifactInFrame)
+  await waitForLoadedFrame(page, frameReady)
   const frames = () => page.frames().filter((frame) => frame !== page.mainFrame())
   // Sampled before the action as well as after: a case that taps a link is asking what the tap
   // produced, and by then the top frame is mid-navigation and the iframe has blanked to its own
@@ -437,7 +437,10 @@ for (const engine of ['chromium', 'webkit']) {
         const loose = await open(browser(), {
           extra: { body: script() },
           csp: null,
-          sandbox: 'allow-scripts allow-top-navigation-by-user-activation'
+          sandbox: 'allow-scripts allow-top-navigation-by-user-activation',
+          // The oracle here is what the script did, and the marker element exists before it runs,
+          // so this arm waits for the script's own write instead.
+          frameReady: 'script'
         })
         expect(loose.pixel).toBe(ARTIFACT_RGB)
         expect(loose.inside?.ran).toBe(1)
@@ -539,7 +542,7 @@ for (const engine of ['chromium', 'webkit']) {
           extra: { head: '<meta http-equiv="refresh" content="0;url=/">' },
           // This arm's frame leaves the artifact behind, which is the whole point of it, so the
           // marker is not what says it is ready, and the navigation it makes is what it waits for.
-          expectArtifactInFrame: false,
+          frameReady: 'load',
           expectNavigation: 'frame'
         })
         expect(loose.ownOriginFrameNavigations).toBe(1)
@@ -566,7 +569,7 @@ for (const engine of ['chromium', 'webkit']) {
         const policyOnly = await open(browser(), {
           sandbox: 'allow-scripts allow-same-origin allow-top-navigation',
           extra: { head: '<meta http-equiv="refresh" content="0;url=/">' },
-          expectArtifactInFrame: false
+          frameReady: 'load'
         })
         expect(policyOnly.ownOriginFrameNavigations).toBe(0)
         expect(policyOnly.ownOriginTopNavigations).toBe(0)
@@ -652,17 +655,30 @@ describe('the HTML preview needs no policy change', () => {
  * Three things still settle at their own moments: React commits the mount, the element's `srcdoc`
  * commits a document, and an override arm replaces that document with a second one. So readiness is
  * the fixture's own marker inside the frame, which exists only once the artifact has parsed there.
- * `expectArtifact` is false for the one arm whose artifact deliberately navigates the frame
- * somewhere else, where no marker is ever coming. Everything is bounded by the case's own timeout.
+ *
+ * `frameReady` is which of those an arm is waiting for, because the marker is not always the right
+ * one. `'script'` waits for what the inline script writes: the marker element exists from parse
+ * time, so an arm whose oracle is "the script ran" would otherwise read `window.__ran` before it
+ * had. `'load'` is for the one arm whose artifact deliberately navigates the frame somewhere else,
+ * where no marker is ever coming.
  */
-async function waitForLoadedFrame(page, expectArtifact = true) {
+async function waitForLoadedFrame(page, frameReady = 'artifact') {
   const element = await page.waitForSelector('iframe', { timeout: 0 })
   const frame = await element.contentFrame()
   if (!frame) {
     return null
   }
   await frame.waitForLoadState('load').catch(() => {})
-  if (expectArtifact) {
+  if (frameReady === 'script') {
+    await frame
+      .waitForFunction(() => window.__ran === 1, undefined, { timeout: 20_000 })
+      .catch(async (error) => {
+        throw new Error(
+          `the artifact's script never ran inside the frame (${await describeFrame(page, frame)}): ${String(error).split('\n')[0]}`
+        )
+      })
+  }
+  if (frameReady !== 'load') {
     // Bounded well inside the case's timeout, and the bound is for the message. The runner's Chrome
     // read this frame's URL as empty where three chromium builds here read `about:srcdoc`, and the
     // difference is not reproducible locally, so a frame that never becomes ready has to say what it
