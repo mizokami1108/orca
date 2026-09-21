@@ -73,6 +73,8 @@ export function createPageDictationCapture(
   const chunkHandlers: Handlers<(chunk: DictationCaptureChunk) => void> = new Set()
   const interruptionHandlers: Handlers<() => void> = new Set()
   let timer: ReturnType<typeof setInterval> | null = null
+  /** The end in flight, or the one that already finished; null while a capture is drainable. */
+  let ending: Promise<void> | null = null
   /** The read in flight, if there is one. At most one: two would double the slots dictation spends
    *  and can settle out of order, which is a splice of two moments reaching the transcriber as
    *  speech. Held rather than flagged so a stop can wait for it before taking its own turn. */
@@ -150,12 +152,34 @@ export function createPageDictationCapture(
    * order here is the whole fix. An in-flight drain is awaited before the last read rather than
    * raced with it, because two reads settling out of order splice two moments together.
    */
-  async function endCapture(): Promise<void> {
+  async function runEndCapture(): Promise<void> {
     stopDraining()
     await reading
     reading = null
     await readOnce()
     await stopShell()
+  }
+
+  /**
+   * Idempotent for the life of one capture, which is what stops a refused read looping.
+   *
+   * The hook's interruption handler is `() => void cancel()`, and `cancel` reaches `end()`
+   * synchronously through `closeDictationAudio`. So the last read here can raise an interruption
+   * that calls straight back into this function, whose own last read is refused for the same
+   * reason — the shell has no capture — and the recursion issues bridge reads until the page runs
+   * out of memory. Returning the first call's promise makes the second a no-op rather than a
+   * second read. `begin` clears it, because the seam is memoised per client and the next dictation
+   * on the same screen has to be able to drain.
+   */
+  function endCapture(): Promise<void> {
+    if (ending !== null) {
+      return ending
+    }
+    // Assigned before anything can await, so a handler re-entering from inside the read below
+    // finds it set rather than starting a second end.
+    const run = runEndCapture()
+    ending = run
+    return run
   }
 
   return {
@@ -171,6 +195,7 @@ export function createPageDictationCapture(
     },
     begin: () => {
       // The shell began capturing inside `start`; this is the page's half, which is the drain.
+      ending = null
       stopDraining()
       timer = setInterval(() => {
         void drain()
@@ -181,6 +206,8 @@ export function createPageDictationCapture(
     // No last read: a release is the screen going away, and there is nobody left to hand the tail
     // to. The shell sweeps the ring with the capture.
     release: () => {
+      // Marked ended so a later `end` neither reads nor stops again: the screen is going away.
+      ending ??= Promise.resolve()
       stopDraining()
       void stopShell()
     },

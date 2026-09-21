@@ -370,6 +370,57 @@ describe('a capture the page loses', () => {
     expect(interrupted).toBe(1)
   })
 
+  it('does not loop when the interruption handler ends the capture, as the hook does', async () => {
+    // The hook's handler is `() => void cancel()`, and `cancel` reaches `capture.end()`
+    // synchronously through `closeDictationAudio`. So a refused read inside `end` re-enters `end`,
+    // whose own last read is refused too: without an idempotent `end` that recursion issues bridge
+    // reads until the page is torn down.
+    const shell = createAudioShell({
+      refuse: (verb) =>
+        verb === 'native.audio.read'
+          ? new BridgeNativeVerbRefusedError(
+              'native_audio_not_capturing',
+              'this session has no capture to read from'
+            )
+          : null
+    })
+    const pair = createFakeBridgePortPair({ serveNativeVerb: shell.serveNativeVerb })
+    const capture = await mount(pair)
+    capture.onInterruption(() => {
+      void capture.end()
+    })
+    await capture.open()
+    capture.begin()
+    await act(async () => {
+      await capture.end()
+      await pair.flush()
+    })
+    await tick(pair, 3)
+    const reads = shell.calls.filter((verb) => verb === 'native.audio.read').length
+    expect(reads).toBeLessThanOrEqual(2)
+  })
+
+  it('reads again for the next dictation after an end, rather than staying ended', async () => {
+    // `end` is idempotent for the life of one capture, and the seam is memoised per client, so a
+    // second dictation on the same screen has to be able to drain.
+    const shell = createAudioShell()
+    const pair = createFakeBridgePortPair({ serveNativeVerb: shell.serveNativeVerb })
+    const capture = await mount(pair)
+    const chunks: DictationCaptureChunk[] = []
+    capture.onChunk((chunk) => chunks.push(chunk))
+    await capture.open()
+    capture.begin()
+    await act(async () => {
+      await capture.end()
+      await pair.flush()
+    })
+    await capture.open()
+    capture.begin()
+    shell.speak(pcm(512, 21))
+    await tick(pair)
+    expect(Array.from(chunks.at(-1)?.data ?? [])).toEqual(Array.from(pcm(512, 21)))
+  })
+
   it('swallows a refused stop, because a capture that will not end is not the page to fix', async () => {
     const shell = createAudioShell({
       refuse: (verb) =>
