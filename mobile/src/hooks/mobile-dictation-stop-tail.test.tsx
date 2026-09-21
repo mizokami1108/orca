@@ -14,17 +14,23 @@
 import { createElement } from 'react'
 import { act, create } from 'react-test-renderer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RpcClient } from '../transport/rpc-client'
+import {
+  createFakeRpcClient,
+  type FakeRpcClient,
+  type SentRequest
+} from '../mobile-web-shell/bridge-host-test-fakes'
 import type {
   DictationCapture,
   DictationCaptureChunk
 } from '../platform/dictation-capture-contract'
 
-const seam = vi.hoisted(() => ({
-  chunkHandlers: new Set<(chunk: DictationCaptureChunk) => void>(),
+type Seam = {
+  chunkHandlers: Set<(chunk: DictationCaptureChunk) => void>
   /** Bytes the capture is still holding when `end()` is called, as the shell's ring would be. */
-  tail: null as Uint8Array | null
-}))
+  tail: Uint8Array | null
+}
+
+const seam = vi.hoisted((): Seam => ({ chunkHandlers: new Set(), tail: null }))
 
 vi.mock('react-native', () => ({
   AppState: { currentState: 'active', addEventListener: () => ({ remove: () => {} }) },
@@ -66,27 +72,41 @@ vi.mock('../platform/dictation-capture', () => {
 
 import { useMobileDictation, type UseMobileDictationResult } from './use-mobile-dictation'
 
-type Sent = { method: string; params: Record<string, unknown> }
+/** The desktop, answering whatever the hook forwards. `finish` carries the transcript, which is
+ *  the one reply the flow reads. */
+function settle(rpc: FakeRpcClient, sent: SentRequest[]): void {
+  for (const request of rpc.requests.splice(0)) {
+    sent.push(request)
+    request.resolve({
+      id: 'desktop',
+      ok: true,
+      result: request.method === 'speech.dictation.finish' ? { text: 'a sentence' } : {}
+    })
+  }
+}
 
-function createClient(sent: Sent[]): RpcClient {
-  return {
-    sendRequest: async (method: string, params: unknown) => {
-      sent.push({
-        method,
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: every dictation operation sends an object, and this fake only records what it was given.
-        params: (params ?? {}) as Record<string, unknown>
-      })
-      return method === 'speech.dictation.finish'
-        ? { ok: true, result: { text: 'a sentence' } }
-        : { ok: true, result: {} }
-    }
-    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the hook reaches only `sendRequest` on the client; every other member is unused on this path.
-  } as unknown as RpcClient
+/** The base64 a chunk request carried, read by narrowing rather than asserted: the fake records
+ *  whatever the hook passed, and this is a test of what that was. */
+/** Drains and answers whatever the hook sends, for as long as it keeps sending: one dictation is a
+ *  chain of requests where each is only made once the one before it settled. */
+async function pump(rpc: FakeRpcClient, sent: SentRequest[]): Promise<void> {
+  for (let round = 0; round < 8; round += 1) {
+    settle(rpc, sent)
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+}
+
+function audioOf(request: SentRequest): unknown {
+  const params = request.args[1]
+  return typeof params === 'object' && params !== null && 'audioBase64' in params
+    ? params.audioBase64
+    : null
 }
 
 const held: { dictation: UseMobileDictationResult | null } = { dictation: null }
 
-function mount(client: RpcClient): void {
+function mount(client: FakeRpcClient): void {
   function Probe(): null {
     held.dictation = useMobileDictation({
       client,
@@ -117,22 +137,27 @@ beforeEach(() => {
 
 describe('the audio a capture hands over as it ends', () => {
   it('is still accepted, and reaches the desktop before the finish', async () => {
-    const sent: Sent[] = []
-    mount(createClient(sent))
+    const rpc = createFakeRpcClient()
+    const sent: SentRequest[] = []
+    mount(rpc)
     await act(async () => {
-      await dictation().start()
+      const started = dictation().start()
+      await pump(rpc, sent)
+      await started
     })
     // What the user was still saying when they lifted the button, which no timer will come for.
     seam.tail = Uint8Array.from([7, 8, 9, 10])
     await act(async () => {
-      await dictation().stop()
+      const stopped = dictation().stop()
+      await pump(rpc, sent)
+      await stopped
     })
     const methods = sent.map((request) => request.method)
     expect(methods).toContain('speech.dictation.chunk')
     // Refusing chunks before `end()` drops this one silently: the handler reads
     // `acceptingChunksRef` and returns, and the transcript loses the end of the sentence.
     const chunk = sent.find((request) => request.method === 'speech.dictation.chunk')
-    expect(chunk?.params.audioBase64).toBe('BwgJCg==')
+    expect(chunk === undefined ? null : audioOf(chunk)).toBe('BwgJCg==')
     // And it is sent before the finish, or the desktop transcribes without it.
     expect(methods.indexOf('speech.dictation.chunk')).toBeLessThan(
       methods.indexOf('speech.dictation.finish')
@@ -140,13 +165,18 @@ describe('the audio a capture hands over as it ends', () => {
   })
 
   it('stops being accepted once the capture has ended', async () => {
-    const sent: Sent[] = []
-    mount(createClient(sent))
+    const rpc = createFakeRpcClient()
+    const sent: SentRequest[] = []
+    mount(rpc)
     await act(async () => {
-      await dictation().start()
+      const started = dictation().start()
+      await pump(rpc, sent)
+      await started
     })
     await act(async () => {
-      await dictation().stop()
+      const stopped = dictation().stop()
+      await pump(rpc, sent)
+      await stopped
     })
     const before = sent.filter((request) => request.method === 'speech.dictation.chunk').length
     // A late event from a capture that has already ended is not this dictation's audio.
@@ -154,7 +184,7 @@ describe('the audio a capture hands over as it ends', () => {
       handler({ data: Uint8Array.from([1, 2, 3, 4]), droppedBytes: 0 })
     }
     await act(async () => {
-      await Promise.resolve()
+      await pump(rpc, sent)
     })
     expect(sent.filter((request) => request.method === 'speech.dictation.chunk')).toHaveLength(
       before
