@@ -33,7 +33,10 @@ import { mobileWebAppDependenciesPresent } from './mobile-web-app-bundle-depende
 import { MOBILE_WEB_PAGE_ROUTES } from './mobile-web-page-routes.mjs'
 import { MobileWebBundleRouteSchema } from '../../src/shared/mobile-web-bundle/manifest-contract.ts'
 
-const describeClosure = mobileWebAppDependenciesPresent() ? describe : describe.skip
+/** The mobile install: the closure builds need it, and so does anything that imports a mobile
+ *  module, because transforming one resolves `mobile/tsconfig.json` and its Expo base. */
+const bundles = mobileWebAppDependenciesPresent()
+const describeClosure = bundles ? describe : describe.skip
 
 /** The seam, as the web build resolves it: `.web.ts` wins under the builder's resolveExtensions. */
 const SEAM = 'src/platform/dictation-capture.web.ts'
@@ -221,22 +224,34 @@ describe('the census rule itself', () => {
     expect(NATIVE_AUDIO_MODULES).toHaveLength(2)
   })
 
-  it('names only verbs the shell actually serves, read from its own table', async () => {
-    // The failure this guards is the rule agreeing with itself: a list of four names the census
-    // holds routes to, none of which the shell has a row for. Read through `import()` rather than a
-    // static import, because this shard has no Expo runtime and a mobile module that reached one at
-    // import would take the whole file down.
-    const { BRIDGE_NATIVE_VERB_NAMES } =
-      await import('../../mobile/src/mobile-web-shell/bridge/bridge-native-verbs.ts')
-    expect(new Set(DICTATION_GRANTS).size).toBe(4)
-    for (const grant of DICTATION_GRANTS) {
-      expect(BRIDGE_NATIVE_VERB_NAMES, grant).toContain(grant)
-      expect(
-        MobileWebBundleRouteSchema.safeParse({ pathname: '/h', grants: [grant] }).success,
-        grant
-      ).toBe(true)
+  /**
+   * Gated on the mobile install, not merely deferred behind `import()`.
+   *
+   * A dynamic import defers *when* the module loads, not what loading costs. Vite transforms the
+   * file at that moment and resolves the nearest `tsconfig.json` for it, which is
+   * `mobile/tsconfig.json`, which extends `expo/tsconfig.base.json`. On the root-only shard that
+   * package is not installed and the transform throws `TSConfckParseError` — reproduced by moving
+   * `mobile/node_modules` aside and running this file from the repo root, which is what
+   * `test / tests node 24 1/8` does. So the dependency gate is the only thing that keeps a mobile
+   * module off that shard, and it is the same gate `describeClosure` above uses.
+   */
+  it.skipIf(!bundles)(
+    'names only verbs the shell actually serves, read from its own table',
+    async () => {
+      // The failure this guards is the rule agreeing with itself: a list of four names the census
+      // holds routes to, none of which the shell has a row for.
+      const { BRIDGE_NATIVE_VERB_NAMES } =
+        await import('../../mobile/src/mobile-web-shell/bridge/bridge-native-verbs.ts')
+      expect(new Set(DICTATION_GRANTS).size).toBe(4)
+      for (const grant of DICTATION_GRANTS) {
+        expect(BRIDGE_NATIVE_VERB_NAMES, grant).toContain(grant)
+        expect(
+          MobileWebBundleRouteSchema.safeParse({ pathname: '/h', grants: [grant] }).success,
+          grant
+        ).toBe(true)
+      }
     }
-  })
+  )
 })
 
 /** Kept so a reader can find the tree this ran against without a machine path in the file. */
