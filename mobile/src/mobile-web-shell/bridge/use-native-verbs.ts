@@ -73,15 +73,6 @@ export type NativeVerbs = {
   readMedia: (handle: string, offset: number, length: number) => Promise<BridgeMediaChunk>
   /** False for a handle this session no longer holds, which is not a fault. */
   releaseMedia: (handle: string) => Promise<boolean>
-  /**
-   * Whether the shell serves all four verbs dictation needs, which is the page's only microphone.
-   *
-   * All four, not the three the capture needs: a route granted the audio verbs and not the wake
-   * lock would record with the screen free to lock, and a lock mid-processing suspends the app and
-   * loses the transcript. A route missing one has no working dictation, so this says so up front
-   * rather than after the user has spoken into it.
-   */
-  canCaptureAudio: boolean
   /** Opens the microphone, running the OS prompt if there is one. A denied microphone and an
    *  engine that would not open are both answers here rather than rejections. */
   startAudio: (sampleRate: number) => Promise<z.infer<typeof audioStartResultSchema>>
@@ -229,11 +220,6 @@ export function useNativeVerbs(): NativeVerbs {
         call('native.media.read', { handle, offset, length }, mediaReadResultSchema),
       releaseMedia: async (handle) =>
         (await call('native.media.release', { handle }, mediaReleaseResultSchema)).released,
-      canCaptureAudio:
-        has('native.audio.start') &&
-        has('native.audio.read') &&
-        has('native.audio.stop') &&
-        has('native.wakelock.set'),
       startAudio: (sampleRate) =>
         call('native.audio.start', { sampleRate }, audioStartResultSchema),
       readAudio: (maxBytes) => call('native.audio.read', { maxBytes }, audioReadResultSchema),
