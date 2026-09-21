@@ -111,8 +111,25 @@ const MERMAID_PACKAGE = 'node_modules/mermaid/'
  * one: `src/mobile-web-shell/bridge/bridge-haptics-notify.ts`, which `haptics.web.ts` reaches
  * since C7.10 E landed beside this pin (#21864 and #21871 were each green against a main without
  * the other).
+ *
+ * Then C7.10 item D put dictation's capture on the page, and the list moved down rather than up:
+ *
+ *   modules        4324 -> 4319   (-5)
+ *   local modules   974 ->  977   (+3)
+ *
+ * Three local modules join — `src/platform/dictation-capture.web.ts`, its contract
+ * `src/platform/dictation-capture-contract.ts`, and the verb shapes in
+ * `src/mobile-web-shell/bridge/bridge-audio-verbs.ts` — and eight vendored ones leave, because the
+ * capture seam is what stops the page importing a microphone it does not have. Five are
+ * `@orca/expo-two-way-audio` (its web module, `core`, `events`, `hooks` and the index) and three
+ * are `expo-keep-awake`; the page asks the shell for both over `native.audio.start|read|stop` and
+ * `native.wakelock.set` instead. The native halves of the seam resolve out of this closure
+ * entirely, which is the -8 + 3.
+ *
+ * Measured, not derived: `mobile-web-app-session-dictation-capture.test.mjs` moves the web file
+ * aside and walks the closure again, which puts those eight back and reads 4,326.
  */
-const MODULES_WITH_MERMAID = 4324
+const MODULES_WITH_MERMAID = 4319
 
 const artifactModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PAGE_ENGINE))
 const packageModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PACKAGE))
