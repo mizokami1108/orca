@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { mobileWebAppRouteClosure } from './build-mobile-web-app-bundle.mjs'
 import { mobileWebAppDependenciesPresent } from './mobile-web-app-bundle-dependencies.mjs'
+import { mobileWebAppRouteChunkClosure } from './mobile-web-app-route-chunk-closure.mjs'
 import {
   textInputFontSizeOffenders,
   unresolvedTextInputStyles
@@ -16,30 +17,41 @@ import {
  * the terminal is by far the largest thing in it. Measured here so the trade is a number rather
  * than a claim, and so that a later change cannot quietly put the engine string back.
  *
- * Measured against `origin/main` at ec82173130, which is C7.5 as it landed. The reading is
- * re-anchored rather than adjusted: the base this note used to name is far enough back that main
- * has moved 44,296 bytes below its number through changes that are not this lane's.
+ * Re-anchored twice. C7.5b re-measured on its merge of main at 35005fb65c9, because the two sides
+ * of that merge do not add up: it read -40 where main's own mermaid reading below reads +3, and the
+ * merged total came out one above their sum. C7.5c then merged that branch, and the reading moves
+ * again, because ruling 25 changes which files carry the document.
  *
- *   modules        4320 -> 4322   (+2)
- *   local modules   970 ->  972   (+2)
- *   minified bytes  3,768,122 -> 3,764,937   (-3,185)
+ *   modules        4284 -> 4326   (+42)
+ *   local modules   934 ->  976   (+42)
  *
- * That byte figure is the lane's own, measured at the commit before main was merged in. This head
- * reads 3,765,180: the 243 between them are the two touch-root predicates and main's own #21687
- * momentum change, which arrived with e476193bf5 and are not this lane's to claim either way.
+ * Both sides read with `mobileWebAppRouteClosure(SESSION_ROUTE)` and the four postinstall
+ * generators run first, C7.5b's in a scratch worktree detached at 7ceb633df0, where it reproduces
+ * its own 4,284 exactly.
  *
- * What moved is which files carry the document, not whether the page carries it. C7.5 already put
- * the document's own source modules in this closure and started them per mount, and ruling 25 keeps
- * them there: the page imports ordinary TypeScript and calls it, and nothing generated is in the
- * reading at all — the bundle the phone loads is built from the same modules and is not imported
- * here.
+ * The +42 is 43 modules in and one out, and the one out is the whole of it: C7.5b's page imported
+ * `terminal-webview-document-factory.generated.ts`, one emitted file carrying the entire document.
+ * Ruling 25 deletes it, so the page imports the document's 39 source modules directly and reaches,
+ * through them, the three page modules the tap group reads — `terminal-webview-url-tap`,
+ * `terminal-path-tap` and `terminal-file-url-tap` — which the generator used to substitute as
+ * literals. The 43rd is `terminal-text-scales`, the leaf the presets moved to so that the WebView's
+ * own bundle cannot reach `storage/preferences` and the AsyncStorage import behind it.
  *
- * The +2 is four modules in and two out. In: `create-terminal-document` holds the start and stop
- * sequence, `document-frame-registry` holds the frames, `escape-introducers` holds the two control
- * bytes, and `terminal-text-scales` holds the presets both the document and `storage/preferences`
- * read — a leaf, because the document is bundled for the WebView and must not reach that module's
- * AsyncStorage import. Out: `document-constants`, which existed because a generated string cannot
- * import, and `runtime-constants`, whose one element read is the first line of `startSurfaceSwap`.
+ * Nothing generated is in this reading at all now. The phone's script is built from these same
+ * modules and is not imported here, which is what `SHED` holds.
+ *
+ * One module inside the 4,284 belongs to neither branch: `src/mobile-web-shell/bridge/
+ * bridge-haptics-notify.ts`, which `haptics.web.ts` reaches. C7.10 item E (#21864) and mermaid
+ * (#21871) were each green against a main that lacked the other, so main held 4323 while measuring
+ * 4324, and #21908 re-pinned it there. Which is the point of re-measuring rather than summing: a
+ * merged number arrived at as -40 plus +3 would have read 4283 and been wrong about a module
+ * neither side of the merge moved.
+ *
+ * The byte reading is not re-measured here and stays where it was taken, against main at
+ * ec82173130: 3,768,122 -> 3,766,312 minified (-1,810). `mobileWebAppRouteClosure` reads
+ * `metafile.inputs` and returns no byte total, so a figure produced here would be a different
+ * computation rather than a newer reading of that one. This lane's own byte figure, measured the
+ * way it took it, is 3,764,937 before its merges and 3,765,180 after them.
  *
  * The bytes fall because threading the scope deletes a closure: every function names its state as a
  * parameter, and a parameter minifies to one character where a shared module-level object could not.
@@ -50,6 +62,38 @@ import {
  * xterm was already a static import of the mount before this, so nothing here is xterm arriving: it
  * and its two addons are 607,945 bytes minified ESM on their own, and they are on both sides of the
  * reading above.
+ *
+ * Two earlier readings of the same measurement, against the bases this branch sat on before:
+ * -47,255 at 51ae7b1b03 and -55,561 at 0ce0fc99a2. They differ because C7.1's own round-1 fold
+ * deleted `URL_TAP_WEBVIEW_JS` from a module only the page's component brings into this closure,
+ * so the saving lands on the after side and no base can show it.
+ *
+ * Then C7.10 item B put mermaid on the page, and the module list moved again. Its own reading, at
+ * the base it was taken against:
+ *
+ *   modules        4320 -> 4323   (+3)
+ *   local modules   970 ->  973   (+3)
+ *
+ * Three modules: the configuration both hosts read, the loader, and the pre-bundled engine the
+ * loader imports on demand. The engine's own 66 files and the d3, dagre, katex and cytoscape trees
+ * under them are inside that one artifact rather than in this graph, which is why the count barely
+ * moves. Importing the package here instead read +2,056 and emitted 103 scripts, a package
+ * splitting along its own lazy diagram-type boundaries -- every one of them inside the OTA generation
+ * the phone had already downloaded, so the split moved no bytes and spent 103 of the 256 manifest
+ * assets the shell will load. One artifact costs one script and one module.
+ *
+ * What the generation weighs, because every chunk ships in it whether or not a phone ever fetches
+ * one: the built bundle is 8,016,714 bytes across 112 assets, against the 9 MiB ceiling in
+ * `verify-mobile-web-app-bundle.mjs`. That is 84.9% of it, with 1,420,470 bytes left for the rest
+ * of C7.10 and for C7.7. Before item B the same bundle was 4,539,090 bytes, and the engine is the
+ * difference -- deferring it defers evaluation and a fetch, never the download.
+ *
+ * `mobileWebAppRouteClosure` reads `metafile.inputs`, which holds dynamically imported modules
+ * under `splitting: true` just as it does under `splitting: false`, so it cannot express "on
+ * demand" about anything. Ruling 28: the fence for this route is `entryStaticClosure`, which
+ * follows `import-statement` edges only, and the module list's total is a recorded number rather
+ * than a budget. It moves whenever main adds a module this route reaches, and is re-recorded rather
+ * than argued with.
  */
 
 const projectDir = fileURLToPath(new URL('../..', import.meta.url))
@@ -93,6 +137,20 @@ const XTERM_PACKAGES = ['@xterm/xterm', '@xterm/addon-unicode11', '@xterm/addon-
  */
 const EXPECTED_OFFENDERS = 0
 
+/** The deferred engine, as the page reaches it: one artifact, not the package's own file tree. */
+const MERMAID_PAGE_ENGINE = 'src/components/pr-sidebar/mermaid-page-engine.generated.ts'
+const MERMAID_PACKAGE = 'node_modules/mermaid/'
+
+/**
+ * The module list on the merge, recorded at the base in the docstring above, which is where
+ * everything inside it is accounted for: the document's own modules replacing the factory that
+ * carried them, mermaid's three, and the haptics notify module #21908 pins on main.
+ */
+const SESSION_ROUTE_MODULES = 4326
+
+const artifactModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PAGE_ENGINE))
+const packageModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PACKAGE))
+
 const bundles = mobileWebAppDependenciesPresent()
 const describeClosure = bundles ? describe : describe.skip
 
@@ -125,6 +183,27 @@ describeClosure(
       expect(documentModules).not.toContain('src/terminal/document/native-document-entry.ts')
       expect(local).not.toContain('src/terminal/terminal-webview-document-script.generated.ts')
     }, 300_000)
+
+    it('reaches the engine as one deferred module and never as part of the download', async () => {
+      const { modules } = await mobileWebAppRouteClosure(SESSION_ROUTE)
+      // The engine is here, as the one artifact the loader imports.
+      expect(artifactModules(modules)).toHaveLength(1)
+      // And the package's own file tree is not, anywhere: it is inside that artifact. Meaningful
+      // only beside the line above, which is why the two sit together.
+      expect(packageModules(modules)).toEqual([])
+      expect(modules).toHaveLength(SESSION_ROUTE_MODULES)
+
+      const download = await mobileWebAppRouteChunkClosure(SESSION_ROUTE)
+      // The fence: nothing of the engine is reachable from the route's own chunk by an import
+      // statement, so opening the session pays none of it.
+      expect(artifactModules(download.staticInputs)).toEqual([])
+      // The precondition that absence needs. The artifact is in the bundle, in a chunk the route
+      // reaches by a `dynamic-import` edge instead -- a deferred engine, not a dropped one.
+      expect(artifactModules(download.deferredInputs)).toHaveLength(1)
+      // And the walk read a real download rather than one chunk: the route's own chunk is in it.
+      expect(download.staticChunks).toContain(download.routeChunk)
+      expect(download.staticInputs.length).toBeGreaterThan(1000)
+    }, 600_000)
 
     it('leaves the 16px seam census exactly where C7.2 left it', async () => {
       const closure = await mobileWebAppRouteClosure(SESSION_ROUTE)
