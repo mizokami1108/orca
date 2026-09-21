@@ -1047,12 +1047,16 @@ export class SshConnection {
         !(err instanceof Error) ||
         this.disposed ||
         !this.isCurrentConnectAttempt(connectGeneration) ||
-        isHostKeyVerificationError(err) ||
-        !isPassphraseError(err)
+        isHostKeyVerificationError(err)
       ) {
         throw err
       }
-      return err
+      if (isPassphraseError(err)) {
+        return err
+      }
+      // A different failure means ssh2 decrypted the key, so retain the accepted passphrase for connection retries.
+      this.cachedPassphrase = passphrase
+      throw err
     }
   }
 

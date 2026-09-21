@@ -545,6 +545,36 @@ describe('SshConnection', () => {
     }
   })
 
+  it('reuses an accepted passphrase after a transient connection failure', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'orca-ssh-key-'))
+    const keyPath = join(tempDir, 'selected-key')
+    writeFileSync(keyPath, 'encrypted-key')
+    ssh2Mock.connectSequence = [
+      new Error('Encrypted private OpenSSH key detected, but no passphrase given'),
+      new Error('read ECONNRESET'),
+      'ready'
+    ]
+    const onCredentialRequest = vi.fn(async () => 'correct-passphrase')
+
+    try {
+      const conn = new SshConnection(
+        createTarget({ identityFile: keyPath }),
+        createCallbacks({ onCredentialRequest })
+      )
+
+      await conn.connect()
+
+      expect(clientInstances).toHaveLength(3)
+      expect(clientInstances[2].lastConnectConfig).toMatchObject({
+        privateKey: Buffer.from('encrypted-key'),
+        passphrase: 'correct-passphrase'
+      })
+      expect(onCredentialRequest).toHaveBeenCalledTimes(1)
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   it('does not request a password when host-key verification rejects the passphrase retry', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'orca-ssh-key-'))
     const keyPath = join(tempDir, 'id_ed25519')
