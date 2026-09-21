@@ -17,47 +17,66 @@ import {
  * the terminal is by far the largest thing in it. Measured here so the trade is a number rather
  * than a claim, and so that a later change cannot quietly put the engine string back.
  *
- * Re-anchored twice. C7.5b re-measured on its merge of main at 35005fb65c9, because the two sides
- * of that merge do not add up: it read -40 where main's own mermaid reading below reads +3, and the
- * merged total came out one above their sum. C7.5c then merged that branch, and the reading moves
- * again, because ruling 25 changes which files carry the document.
+ * Re-anchored on main at 4a3a32206d, the squash that landed C7.5b, and re-measured there. The
+ * reading has been re-taken at each merge rather than adjusted, because the arithmetic keeps not
+ * working: main has re-pinned this count three times for modules that arrived from three other PRs,
+ * and a number carried forward would have been wrong about every one of them.
  *
- *   modules        4284 -> 4326   (+42)
- *   local modules   934 ->  976   (+42)
+ *   modules        4286 -> 4328   (+42)
+ *   local modules   936 ->  978   (+42)
+ *
+ * The +42 is this lane's, and it is 43 modules in and one out. Out:
+ * `terminal-webview-document-factory.generated.ts`, the one emitted file C7.5b's page imported,
+ * which carried the whole document. In: the document's 39 source modules the page imports directly
+ * under ruling 25, the three page modules their tap group reaches — `terminal-webview-url-tap`,
+ * `terminal-path-tap` and `terminal-file-url-tap` — which the generator used to substitute as
+ * literals, and `terminal-text-scales`, the leaf the presets moved to so the WebView's own bundle
+ * cannot reach `storage/preferences` and the AsyncStorage import behind it. Nothing generated is in
+ * this reading now: the phone's script is built from these same modules and is not imported here.
+ *
+ * The three modules the base gained, none of them this branch's and all of them in its 4286 by
+ * main's own route:
+ *
+ * - `src/mobile-web-shell/bridge/bridge-haptics-notify.ts`, which `haptics.web.ts` reaches. C7.10
+ *   item E (#21864) and mermaid (#21871) were each green against a main that lacked the other, so
+ *   main held 4323 while measuring 4324, and #21908 re-pinned it there.
+ * - `src/mobile-web-shell/bridge/bridge-page-route-grants.ts` and the
+ *   `mobile-web-bundle/manifest-contract.ts` whose grant grammar it imports rather than restates,
+ *   both C2.9's. They reach every page closure through `bridge-envelope.ts`, which the page reads
+ *   to parse `init`, so this count moves for any route the page serves and not for the session
+ *   alone.
+ *
+ * Which is the point of re-measuring rather than summing. The merged total was one above the sum
+ * the first time, when main had drifted the haptics module after recording its own number, and a
+ * sum would have read 4283 and been wrong about a module neither side of that merge touched.
  *
  * Both sides read with `mobileWebAppRouteClosure(SESSION_ROUTE)` and the four postinstall
- * generators run first, C7.5b's in a scratch worktree detached at 7ceb633df0, where it reproduces
- * its own 4,284 exactly.
+ * generators run first, the before side in a scratch worktree detached at the same sha, and the
+ * three modules above read out of the after side's list by name rather than inferred from the
+ * total. Measured rather than taken from main's pin because the pin covers only the module count,
+ * so the local count beside it would otherwise be a number nobody had read.
  *
- * The +42 is 43 modules in and one out, and the one out is the whole of it: C7.5b's page imported
- * `terminal-webview-document-factory.generated.ts`, one emitted file carrying the entire document.
- * Ruling 25 deletes it, so the page imports the document's 39 source modules directly and reaches,
- * through them, the three page modules the tap group reads — `terminal-webview-url-tap`,
- * `terminal-path-tap` and `terminal-file-url-tap` — which the generator used to substitute as
- * literals. The 43rd is `terminal-text-scales`, the leaf the presets moved to so that the WebView's
- * own bundle cannot reach `storage/preferences` and the AsyncStorage import behind it.
- *
- * Nothing generated is in this reading at all now. The phone's script is built from these same
- * modules and is not imported here, which is what `SHED` holds.
- *
- * One module inside the 4,284 belongs to neither branch: `src/mobile-web-shell/bridge/
- * bridge-haptics-notify.ts`, which `haptics.web.ts` reaches. C7.10 item E (#21864) and mermaid
- * (#21871) were each green against a main that lacked the other, so main held 4323 while measuring
- * 4324, and #21908 re-pinned it there. Which is the point of re-measuring rather than summing: a
- * merged number arrived at as -40 plus +3 would have read 4283 and been wrong about a module
- * neither side of the merge moved.
- *
- * The byte reading is not re-measured here and stays where it was taken, against main at
+ * The byte reading is not re-measured and stays anchored where it was taken, against main at
  * ec82173130: 3,768,122 -> 3,766,312 minified (-1,810). `mobileWebAppRouteClosure` reads
  * `metafile.inputs` and returns no byte total, so a figure produced here would be a different
- * computation rather than a newer reading of that one. This lane's own byte figure, measured the
- * way it took it, is 3,764,937 before its merges and 3,765,180 after them.
+ * computation rather than a newer reading of that one.
  *
  * The bytes fall because threading the scope deletes a closure: every function names its state as a
  * parameter, and a parameter minifies to one character where a shared module-level object could not.
  * Folding the seventeen never-written fields out of that object takes the rest: a constant read
  * through `scope.X` is a property access the minifier must keep, and the same constant as a module
  * `const` is inlined.
+ *
+ * What moved is which files carry the document, not whether the page carries it. C7.5 put the
+ * document's own source modules in this closure and started them per mount; ruling 23 gave the
+ * page the factory the WebView's script was generated from, so the same program arrived as one
+ * emitted file and its 41 inputs leave. The bytes barely move because it is the same program: what
+ * goes is the import and export plumbing between the modules, and what the generator substitutes.
+ *
+ * The two commits inside the -40, because only one of them is the factory arriving: making the
+ * document a factory put the `host` argument on `createTerminalDocumentScope`, the lane's only edit
+ * to a module this closure already carried, and cost 80 bytes on its own -- 3,768,202 measured at
+ * that commit. The -1,890 from there is the page importing the emitted factory instead.
  *
  * xterm was already a static import of the mount before this, so nothing here is xterm arriving: it
  * and its two addons are 607,945 bytes minified ESM on their own, and they are on both sides of the
@@ -142,11 +161,12 @@ const MERMAID_PAGE_ENGINE = 'src/components/pr-sidebar/mermaid-page-engine.gener
 const MERMAID_PACKAGE = 'node_modules/mermaid/'
 
 /**
- * The module list on the merge, recorded at the base in the docstring above, which is where
- * everything inside it is accounted for: the document's own modules replacing the factory that
- * carried them, mermaid's three, and the haptics notify module #21908 pins on main.
+/**
+ * The module list on the merge, recorded at the base in the docstring above, which is where every
+ * part of it is accounted for: the document's own modules replacing the factory that carried them,
+ * mermaid's three, and the three bridge modules #21908 and C2.9 pin on main.
  */
-const SESSION_ROUTE_MODULES = 4326
+const SESSION_ROUTE_MODULES = 4328
 
 const artifactModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PAGE_ENGINE))
 const packageModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PACKAGE))
