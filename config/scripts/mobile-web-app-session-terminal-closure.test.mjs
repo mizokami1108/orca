@@ -19,11 +19,19 @@ import {
  *
  * Re-anchored on the merge of main at 35005fb65c9 and re-measured there, because the two sides of
  * that merge do not add up: this branch reads -40 and main's own mermaid reading below reads +3,
- * and the merged total is one above their sum. Main drifted a module of its own after recording
- * 4323, which is exactly the kind of thing a summed number would have hidden.
+ * and the merged total is one above their sum.
  *
  *   modules        4324 -> 4284   (-40)
  *   local modules   974 ->  934   (-40)
+ *
+ * The extra module is `src/mobile-web-shell/bridge/bridge-haptics-notify.ts`, which C7.10 item E
+ * put on the session route after the +3 below was recorded, so main itself reads 4324 against the
+ * 4323 it holds and #21908 re-pins it there. It is in this branch's 4284 for the same reason and
+ * by the same route, not as anything this branch did: `haptics.web.ts` was already in the closure
+ * and the bridge module joins it.
+ *
+ * Which is the point of re-measuring rather than summing. A merged number arrived at as
+ * -40 plus +3 would have read 4283 and been wrong about a module neither side of the merge moved.
  *
  * Both sides read with `mobileWebAppRouteClosure(SESSION_ROUTE)` and the four postinstall
  * generators run first, main's in a scratch worktree detached at the same sha.
