@@ -53,7 +53,11 @@ export function MobileHtmlPreview({ html, renderSource }: MobileHtmlPreviewProps
           style={[styles.toggle, mode === 'preview' && styles.toggleActive]}
           onPress={() => setMode('preview')}
           accessibilityRole="tab"
+          // Both, because they reach different readers: `accessibilityState` is what the phone's
+          // screen reader takes, and react-native-web drops it entirely -- measured, the DOM carries
+          // no `aria-selected` without the line below.
           accessibilityState={{ selected: mode === 'preview' }}
+          aria-selected={mode === 'preview'}
           accessibilityLabel="Preview rendered HTML"
         >
           <Eye size={13} color={colors.textSecondary} strokeWidth={2.2} />
@@ -64,6 +68,7 @@ export function MobileHtmlPreview({ html, renderSource }: MobileHtmlPreviewProps
           onPress={() => setMode('source')}
           accessibilityRole="tab"
           accessibilityState={{ selected: mode === 'source' }}
+          aria-selected={mode === 'source'}
           accessibilityLabel="View HTML source"
         >
           <Code size={13} color={colors.textSecondary} strokeWidth={2.2} />

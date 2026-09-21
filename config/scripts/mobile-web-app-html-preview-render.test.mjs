@@ -335,6 +335,17 @@ async function open(
   // background. So the precondition "there was a rendered artifact to tap" is this reading, and the
   // one below is only meaningful for a case that did nothing.
   const pixelBefore = await probePixel(page)
+  const readToggles = async () =>
+    await page
+      .evaluate(() =>
+        [...document.querySelectorAll('[role="tab"]')].map((one) => ({
+          label: one.getAttribute('aria-label'),
+          selected: one.getAttribute('aria-selected')
+        }))
+      )
+      .catch(() => null)
+  // Sampled before the action as well, because the toggle's whole claim is that it changes.
+  const togglesBefore = await readToggles()
   if (act) {
     await act({ page, frame: frames()[0] ?? null })
   }
@@ -351,6 +362,11 @@ async function open(
     pixelBefore,
     pixel: await probePixel(page),
     declaredSandbox: await page.evaluate(() => window.__sandbox),
+    // What the toolbar emits into the DOM, not what the component was handed: react-native-web
+    // forwards `aria-*` and drops `accessibilityState` on the floor, so a selected state that reads
+    // fine in the test renderer can reach a screen reader as nothing at all.
+    togglesBefore,
+    toggles: await readToggles(),
     // The attribute on the element the component actually rendered, not the constant it exports: a
     // literal in the JSX would leave the constant correct and the frame unsealed, which is what the
     // control run for this file did before this reading existed.
@@ -649,6 +665,16 @@ for (const engine of ['chromium', 'webkit']) {
             await page.getByLabel('View HTML source').click({ timeout: 2000 })
           }
         })
+        // Both positions announce which one is showing, before and after the tap. Asserted on the
+        // DOM because that is where a screen reader reads it.
+        expect(read.togglesBefore).toEqual([
+          { label: 'Preview rendered HTML', selected: 'true' },
+          { label: 'View HTML source', selected: 'false' }
+        ])
+        expect(read.toggles).toEqual([
+          { label: 'Preview rendered HTML', selected: 'false' },
+          { label: 'View HTML source', selected: 'true' }
+        ])
         expect(read.body).toContain('SOURCE_TAB_RENDERED')
         // The frame went with the preview, which is why the toggle is not a control that lies.
         expect(read.frameCount).toBe(0)
