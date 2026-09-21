@@ -111,6 +111,31 @@ export type NativeAudioCapture = {
 
 export function createNativeAudioCapture(engine: NativeAudioEngine): NativeAudioCapture {
   let capture: Capture | null = null
+  let disposed = false
+  /**
+   * Starts and stops run one at a time, in the order the page asked for them.
+   *
+   * Both of them await the device, and both decide what `capture` is when they come back. Two
+   * starts overlapping — a page reloaded while the OS prompt is up, which is the very case the
+   * replacement rule below exists for — each reached `listen()` and the second overwrote the
+   * first's handlers without removing them, leaving the engine calling into a capture nobody could
+   * read for the life of the app. A stop overlapping a start found nothing to end and the start
+   * opened a microphone after it.
+   *
+   * Reads stay off this queue: they must not wait behind an opening capture, and a read with no
+   * capture is already a refusal rather than a guess.
+   */
+  let queue: Promise<unknown> = Promise.resolve()
+
+  function enqueue<Value>(action: () => Promise<Value>): Promise<Value> {
+    // On both settle paths: a start that failed must not wedge every stop behind it.
+    const run = queue.then(action, action)
+    queue = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
 
   function end(): boolean {
     if (capture === null) {
@@ -164,6 +189,11 @@ export function createNativeAudioCapture(engine: NativeAudioEngine): NativeAudio
     if (!opened.opened) {
       return { started: false, sampleRate: opened.sampleRate, permission }
     }
+    // The session can end while the device is still opening. Nothing subscribes after that: the
+    // dispose has already run, and a capture opened behind it would have no owner to stop it.
+    if (disposed) {
+      return { started: false, sampleRate: opened.sampleRate, permission }
+    }
     capture = listen()
     if (!engine.begin()) {
       end()
@@ -195,15 +225,18 @@ export function createNativeAudioCapture(engine: NativeAudioEngine): NativeAudio
   return {
     serve: async (verb, params) => {
       if (verb === 'native.audio.start') {
-        return start(params)
+        return enqueue(() => start(params))
       }
       if (verb === 'native.audio.read') {
         return read(params)
       }
       audioStopParamsSchema.parse(params)
-      return { stopped: end() }
+      // Queued so a stop that followed a start ends the capture that start opened, rather than
+      // finding nothing and leaving a live microphone behind it.
+      return enqueue(async () => ({ stopped: end() }))
     },
     dispose: () => {
+      disposed = true
       end()
     }
   }

@@ -69,6 +69,8 @@ function createTestEngine(
   return {
     engine,
     log,
+    /** How many handlers the engine is still calling. One per live capture, or a leak. */
+    liveListeners: () => ({ microphone: microphone.length, interruptions: interruptions.length }),
     emit: (bytes: Uint8Array) => {
       for (const handler of microphone) {
         handler(bytes)
@@ -348,6 +350,75 @@ describe('the shell capture', () => {
       await capture.serve('native.audio.read', { maxBytes: BRIDGE_AUDIO_RING_MAX_BYTES })
     )
     expect(read.base64).toBe('')
+  })
+
+  it('leaves one capture behind when two starts race the permission prompt', async () => {
+    // A page can be reloaded while the OS prompt is up — the shell's own reason for replacing a
+    // capture rather than refusing one — and both starts then reach `listen()`. The second
+    // overwriting the first left the first's handlers subscribed for the app's lifetime, so the
+    // engine kept filling a ring nobody could read and `dispose` freed one of two.
+    let release: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { engine, log, liveListeners } = createTestEngine({
+      permission: async () => {
+        await gate
+        return 'granted'
+      }
+    })
+    const capture = createNativeAudioCapture(engine)
+    const first = capture.serve('native.audio.start', { sampleRate: 16_000 })
+    const second = capture.serve('native.audio.start', { sampleRate: 16_000 })
+    release?.()
+    await expect(first).resolves.toMatchObject({ started: true })
+    await expect(second).resolves.toMatchObject({ started: true })
+    expect(liveListeners()).toEqual({ microphone: 1, interruptions: 1 })
+    capture.dispose()
+    expect(liveListeners()).toEqual({ microphone: 0, interruptions: 0 })
+    // Two captures were opened and both were ended: one by the replacement, one by the dispose.
+    expect(log.filter((entry) => entry === 'end')).toHaveLength(2)
+  })
+
+  it('does not open a capture for a start that lands after the session ended', async () => {
+    let release: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { engine, liveListeners } = createTestEngine({
+      permission: async () => {
+        await gate
+        return 'granted'
+      }
+    })
+    const capture = createNativeAudioCapture(engine)
+    const pending = capture.serve('native.audio.start', { sampleRate: 16_000 })
+    capture.dispose()
+    release?.()
+    await expect(pending).resolves.toMatchObject({ started: false })
+    expect(liveListeners()).toEqual({ microphone: 0, interruptions: 0 })
+  })
+
+  it('ends a capture a stop asked for while its start was still opening', async () => {
+    let release: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { engine, liveListeners } = createTestEngine({
+      permission: async () => {
+        await gate
+        return 'granted'
+      }
+    })
+    const capture = createNativeAudioCapture(engine)
+    const started = capture.serve('native.audio.start', { sampleRate: 16_000 })
+    const stopped = capture.serve('native.audio.stop', {})
+    release?.()
+    await started
+    // The stop runs after the start it followed, so it ends the capture that start opened rather
+    // than finding nothing and leaving a live microphone behind it.
+    await expect(stopped).resolves.toEqual({ stopped: true })
+    expect(liveListeners()).toEqual({ microphone: 0, interruptions: 0 })
   })
 
   it('ends the capture when the page session does', async () => {
