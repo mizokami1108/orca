@@ -10,11 +10,22 @@
  * shows the rule failing without the four names.
  *
  * The closure also says what the seam took out of the page. Without its web half the bundler
- * resolves the native one and the vendored `@orca/expo-two-way-audio` web stub lands in the
- * closure, which is what dictation on the page used to be: a module answering denied microphone
- * permission and no playback. Measured on this tree, removing the web file puts four of its modules
- * back. So "absent" here is a fact about the seam and not about the census failing to look.
+ * resolves the native one, and the vendored `@orca/expo-two-way-audio` web stub lands in the
+ * closure along with `expo-keep-awake` — which is what dictation on the page used to be: a module
+ * answering denied microphone permission, and a wake lock that did nothing.
+ *
+ * Measured on this tree by moving `dictation-capture.web.ts` aside and walking the closure again:
+ * `modules` 4,319 to 4,326 and `local` 977 to 976. Eight vendored modules re-enter — five from
+ * `@orca/expo-two-way-audio` and three from `expo-keep-awake` — less the one local file that left,
+ * which is the +7. The eight is the number below; the absolute counts are provenance and are not
+ * asserted, because every merge of main moves them and a census that pinned them would fail for
+ * reasons that are nobody's.
+ *
+ * So "absent" here is a fact about the seam and not about the census failing to look, and the
+ * precondition is checked rather than assumed: both package names are resolved from the install, so
+ * a substring that matches nothing fails as a typo rather than passing as an absence.
  */
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { mobileWebAppRouteClosure } from './build-mobile-web-app-bundle.mjs'
@@ -43,7 +54,23 @@ const DICTATION_GRANTS = [
  *  web builds are a denied microphone and a no-op wake lock. */
 const NATIVE_AUDIO_MODULES = ['@orca/expo-two-way-audio', 'expo-keep-awake']
 
+/**
+ * How many of their modules re-enter the session closure when the seam's web half is moved aside.
+ *
+ * Recorded rather than measured here, because measuring it means walking the closure a second time
+ * against a mutated tree. Five from `@orca/expo-two-way-audio` (its module, `core`, `events`,
+ * `hooks` and the index) and three from `expo-keep-awake`. The docstring above carries the run.
+ */
+const NATIVE_AUDIO_MODULES_BEHIND_THE_SEAM = 8
+
+const SESSION_PATHNAME = '/h/[hostId]/session/[worktreeId]'
 const SESSION = 'app/h/[hostId]/session/[worktreeId].tsx'
+
+/** Resolved from `mobile/`, which is the tree the bundler resolves the closure out of: this suite
+ *  runs at the repo root, where neither package is installed. */
+function resolveFromMobile(specifier) {
+  return createRequire(new URL('../../mobile/package.json', import.meta.url)).resolve(specifier)
+}
 
 /** The route module a registered pathname is served from, the way expo-router files are named. */
 function routeModule(pathname) {
@@ -59,20 +86,31 @@ function dictationGrantsNeeded(closure) {
   return closure.local.includes(SEAM) ? DICTATION_GRANTS : []
 }
 
+/**
+ * The rule, as one function both the check and its control drive.
+ *
+ * Every grant a route's own closure needs and its entry does not name, as `<pathname> needs
+ * <grant>`. One implementation, because a control that re-implemented the filter would prove the
+ * control works and say nothing about the rule.
+ */
+async function grantsMissingForRoutes(routes) {
+  const missing = []
+  for (const route of routes) {
+    const closure = await mobileWebAppRouteClosure(routeModule(route.pathname))
+    for (const grant of dictationGrantsNeeded(closure)) {
+      if (!route.grants.includes(grant)) {
+        missing.push(`${route.pathname} needs ${grant}`)
+      }
+    }
+  }
+  return missing
+}
+
 describeClosure(
   'the routes that reach dictation capture',
   () => {
     it('holds every registered page route to the grants its own closure needs', async () => {
-      const missing = []
-      for (const route of MOBILE_WEB_PAGE_ROUTES) {
-        const closure = await mobileWebAppRouteClosure(routeModule(route.pathname))
-        for (const grant of dictationGrantsNeeded(closure)) {
-          if (!route.grants.includes(grant)) {
-            missing.push(`${route.pathname} needs ${grant}`)
-          }
-        }
-      }
-      expect(missing).toEqual([])
+      expect(await grantsMissingForRoutes(MOBILE_WEB_PAGE_ROUTES)).toEqual([])
     })
 
     it('finds the seam in exactly one closure, which is the session route', async () => {
@@ -91,21 +129,26 @@ describeClosure(
       expect(session.local).toContain(SEAM)
     })
 
-    it('fails the same rule for the session route until it names all four', async () => {
-      const closure = await mobileWebAppRouteClosure(SESSION)
-      const needed = dictationGrantsNeeded(closure)
-      expect(needed).toEqual(DICTATION_GRANTS)
-      // The rule, run against the grants C7.7 would register it with today.
-      const asRegistered = { pathname: '/h/[hostId]/session/[worktreeId]', grants: [] }
-      expect(needed.filter((grant) => !asRegistered.grants.includes(grant))).toEqual(
-        DICTATION_GRANTS
-      )
-      // And every one of the four is a name a manifest route may carry, which is the ruling-6a trap:
+    it('reds the same rule when the session route is registered without them', async () => {
+      // The control for the rule above, which is vacuous until C7.7 registers this route: the same
+      // loop, driven over the entry C7.7 would write if it copied its neighbours' grants.
+      expect(
+        await grantsMissingForRoutes([
+          { pathname: SESSION_PATHNAME, grants: ['navigate', 'storage'] }
+        ])
+      ).toEqual(DICTATION_GRANTS.map((grant) => `${SESSION_PATHNAME} needs ${grant}`))
+      // And with all four named it passes, so the rule is satisfiable and not a wall.
+      expect(
+        await grantsMissingForRoutes([
+          { pathname: SESSION_PATHNAME, grants: ['navigate', 'storage', ...DICTATION_GRANTS] }
+        ])
+      ).toEqual([])
+      // Every one of the four is a name a manifest route may carry, which is the ruling-6a trap:
       // `native.audio.readChunk` is not a route that degrades to native, it is a bundle the phone
       // refuses entire.
       expect(
         MobileWebBundleRouteSchema.safeParse({
-          pathname: asRegistered.pathname,
+          pathname: SESSION_PATHNAME,
           grants: DICTATION_GRANTS
         }).success
       ).toBe(true)
@@ -116,6 +159,9 @@ describeClosure(
       expect(closure.local).toContain(SEAM)
       expect(closure.local).not.toContain(NATIVE_SEAM)
       for (const absent of NATIVE_AUDIO_MODULES) {
+        // The precondition for reading an absence: the package is installed, so the substring below
+        // would match if the closure carried it. Without this the case passes on a typo.
+        expect(() => resolveFromMobile(`${absent}/package.json`), absent).not.toThrow()
         expect(
           closure.modules.filter((module) => module.includes(`/${absent}/`)),
           absent
@@ -153,11 +199,21 @@ describe('the census rule itself', () => {
     expect(dictationGrantsNeeded({ local: ['src/platform/media-picker.web.ts'] })).toEqual([])
   })
 
-  it('reads the census file rather than a copy of this list', () => {
-    // A guard against the failure this file exists to avoid: the rule above must not be checked
-    // against a list that agrees with itself while naming verbs the shell does not serve.
+  it('records what the seam keeps out, in the number that was measured', () => {
+    expect(NATIVE_AUDIO_MODULES_BEHIND_THE_SEAM).toBe(8)
+    expect(NATIVE_AUDIO_MODULES).toHaveLength(2)
+  })
+
+  it('names only verbs the shell actually serves, read from its own table', async () => {
+    // The failure this guards is the rule agreeing with itself: a list of four names the census
+    // holds routes to, none of which the shell has a row for. Read through `import()` rather than a
+    // static import, because this shard has no Expo runtime and a mobile module that reached one at
+    // import would take the whole file down.
+    const { BRIDGE_NATIVE_VERB_NAMES } =
+      await import('../../mobile/src/mobile-web-shell/bridge/bridge-native-verbs.ts')
     expect(new Set(DICTATION_GRANTS).size).toBe(4)
     for (const grant of DICTATION_GRANTS) {
+      expect(BRIDGE_NATIVE_VERB_NAMES, grant).toContain(grant)
       expect(
         MobileWebBundleRouteSchema.safeParse({ pathname: '/h', grants: [grant] }).success,
         grant
