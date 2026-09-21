@@ -290,9 +290,9 @@ describe('useMobileDictation source invariants', () => {
 
     expect(interruptionEffect).toContain('void cancel()')
     expect(disabledEffect).toContain('void cancel()')
-    // The native half still decides which interruptions end a capture; a page hears the same two
-    // on a read reply.
-    expect(nativeCaptureSource).toContain("event.data === 'began' || event.data === 'blocked'")
+    // Which interruptions end a capture is one predicate both seams read, so a page cannot cancel
+    // on a kind the device ignores. `dictation-capture.test.ts` drives the rule itself.
+    expect(nativeCaptureSource).toContain('bridgeAudioInterruptionEndsCapture(event.data)')
   })
 
   it('uses per-owner dictation keep-awake tags and serializes async ownership changes', () => {
