@@ -242,6 +242,50 @@ describe('draining the shell ring', () => {
     expect(chunks[0]?.droppedBytes).toBe(2_048)
   })
 
+  it('delivers the tail still in the ring before it stops the shell', async () => {
+    // The utterance's last 400 ms sits in the shell's ring when the user lifts the button: less
+    // than one drain interval, so no timer will ever come for it. Natively that audio is already
+    // in the hook's hands by the time recording stops, so a page that dropped it would transcribe
+    // a sentence with its ending cut off.
+    const shell = createAudioShell()
+    const pair = createFakeBridgePortPair({ serveNativeVerb: shell.serveNativeVerb })
+    const capture = await mount(pair)
+    const chunks: DictationCaptureChunk[] = []
+    capture.onChunk((chunk) => chunks.push(chunk))
+    await capture.open()
+    capture.begin()
+    await tick(pair)
+    // 400 ms of 16 kHz 16-bit PCM, spoken after the last drain and before the next one.
+    const tail = pcm(12_288, 11)
+    shell.speak(tail)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+      await pair.flush()
+    })
+    expect(chunks).toEqual([])
+    await act(async () => {
+      await capture.end()
+      await pair.flush()
+    })
+    expect(chunks).toHaveLength(1)
+    expect(Array.from(chunks[0]?.data ?? [])).toEqual(Array.from(tail))
+  })
+
+  it('stops the shell after the last read, never before it', async () => {
+    const shell = createAudioShell()
+    const pair = createFakeBridgePortPair({ serveNativeVerb: shell.serveNativeVerb })
+    const capture = await mount(pair)
+    await capture.open()
+    capture.begin()
+    shell.speak(pcm(2_048, 12))
+    await act(async () => {
+      await capture.end()
+      await pair.flush()
+    })
+    // A stop that landed first would have taken the capture away, and the read would be refused.
+    expect(shell.calls.slice(-2)).toEqual(['native.audio.read', 'native.audio.stop'])
+  })
+
   it('reads nothing once the capture has ended', async () => {
     const shell = createAudioShell()
     const pair = createFakeBridgePortPair({ serveNativeVerb: shell.serveNativeVerb })
@@ -250,11 +294,16 @@ describe('draining the shell ring', () => {
     capture.begin()
     await tick(pair)
     const before = shell.calls.length
-    capture.end()
-    await pair.flush()
+    await act(async () => {
+      await capture.end()
+      await pair.flush()
+    })
+    const afterEnd = shell.calls.length
     await tick(pair, 3)
-    // The stop, and then nothing: a timer left running would keep asking a shell with no capture.
-    expect(shell.calls.slice(before)).toEqual(['native.audio.stop'])
+    // The last read, the stop, and then nothing: a timer left running would keep asking a shell
+    // that no longer has a capture.
+    expect(shell.calls.slice(before, afterEnd)).toEqual(['native.audio.read', 'native.audio.stop'])
+    expect(shell.calls.slice(afterEnd)).toEqual([])
   })
 })
 

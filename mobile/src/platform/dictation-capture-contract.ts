@@ -55,8 +55,18 @@ export type DictationCapture = {
   readonly open: () => Promise<DictationCaptureOpen>
   /** Starts producing chunks. False is a device that would not, which rolls the start back. */
   readonly begin: () => boolean
-  /** Stops producing them. Called on every end, including a throw, so it never throws itself. */
-  readonly end: () => void
+  /**
+   * Stops producing chunks, after handing over everything the capture still holds.
+   *
+   * Asynchronous because of the page, where the audio lives in the shell's ring and the last one
+   * of them has to be fetched: up to one drain interval of the utterance's tail is sitting there
+   * when the user lifts the button, and no timer is coming for it. Natively that audio already
+   * reached the hook as it was produced, so there the promise is already resolved.
+   *
+   * Never rejects. It runs on every exit including a throw, where a rejection would replace what
+   * brought us here with a complaint about cleaning up after it.
+   */
+  readonly end: () => Promise<void>
   /** Gives the capture up for good; the screen's unmount calls it. */
   readonly release: () => void
   readonly onChunk: (

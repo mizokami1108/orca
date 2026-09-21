@@ -72,9 +72,10 @@ export function createPageDictationCapture(
   const chunkHandlers: Handlers<(chunk: DictationCaptureChunk) => void> = new Set()
   const interruptionHandlers: Handlers<() => void> = new Set()
   let timer: ReturnType<typeof setInterval> | null = null
-  /** One read in flight at a time. Two would double the slots dictation spends and can settle out
-   *  of order, which is a splice of two moments reaching the transcriber as speech. */
-  let reading = false
+  /** The read in flight, if there is one. At most one: two would double the slots dictation spends
+   *  and can settle out of order, which is a splice of two moments reaching the transcriber as
+   *  speech. Held rather than flagged so a stop can wait for it before taking its own turn. */
+  let reading: Promise<void> | null = null
 
   function stopDraining(): void {
     if (timer !== null) {
@@ -106,11 +107,7 @@ export function createPageDictationCapture(
     }
   }
 
-  async function drain(): Promise<void> {
-    if (reading) {
-      return
-    }
-    reading = true
+  async function readOnce(): Promise<void> {
     try {
       deliver(await verbs.readAudio(READ_MAX_BYTES))
     } catch {
@@ -118,16 +115,40 @@ export function createPageDictationCapture(
       // above leaves the same way it leaves a phone call, which is the honest answer: there is no
       // microphone, and there will not be one without another start.
       interrupted()
-    } finally {
-      reading = false
     }
   }
 
-  function stopCapture(): void {
+  function drain(): Promise<void> {
+    if (reading !== null) {
+      return reading
+    }
+    const run = readOnce().finally(() => {
+      reading = null
+    })
+    reading = run
+    return run
+  }
+
+  /** Best effort, and deliberately quiet, for the reason `end` never rejects. */
+  async function stopShell(): Promise<void> {
+    await verbs.stopAudio().catch(() => undefined)
+  }
+
+  /**
+   * The tail, then the stop, in that order.
+   *
+   * Whatever is in the ring when the user lifts the button is up to one interval of what they
+   * actually said, and no timer is coming for it — `stopDraining` has just cancelled the one that
+   * was. Stopping first would take the capture away and the read after it would be refused, so the
+   * order here is the whole fix. An in-flight drain is awaited before the last read rather than
+   * raced with it, because two reads settling out of order splice two moments together.
+   */
+  async function endCapture(): Promise<void> {
     stopDraining()
-    // Best effort, and deliberately quiet: this runs on every exit including a throw, where a
-    // rejection would replace what brought us here with a complaint about cleaning up after it.
-    void verbs.stopAudio().catch(() => undefined)
+    await reading
+    reading = null
+    await readOnce()
+    await stopShell()
   }
 
   return {
@@ -149,8 +170,13 @@ export function createPageDictationCapture(
       }, drainIntervalMs)
       return true
     },
-    end: stopCapture,
-    release: stopCapture,
+    end: endCapture,
+    // No last read: a release is the screen going away, and there is nobody left to hand the tail
+    // to. The shell sweeps the ring with the capture.
+    release: () => {
+      stopDraining()
+      void stopShell()
+    },
     onChunk: (handler) => subscribe(chunkHandlers, handler),
     onInterruption: (handler) => subscribe(interruptionHandlers, handler),
     keepAwake: {

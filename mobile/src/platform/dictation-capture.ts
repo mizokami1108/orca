@@ -25,7 +25,9 @@ const nativeDictationCapture: DictationCapture = {
     return (await initialize()) ? { ok: true } : { ok: false, reason: 'unavailable' }
   },
   begin: () => toggleRecording(true),
-  end: () => {
+  // Already resolved: every microphone event reached the hook as the engine produced it, so there
+  // is nothing held back for a stop to hand over.
+  end: async () => {
     toggleRecording(false)
   },
   release: () => {

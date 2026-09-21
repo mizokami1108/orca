@@ -70,7 +70,7 @@ export function useMobileDictation(options: UseMobileDictationOptions): UseMobil
       pendingChunksRef.current.clear()
       pendingAudioBudgetRef.current.reset()
       try {
-        capture.end()
+        void capture.end()
       } catch (err) {
         // Cleanup must keep going when native recording shutdown throws, or
         // the wake tag and dictation state would leak.
@@ -192,7 +192,7 @@ export function useMobileDictation(options: UseMobileDictationOptions): UseMobil
         acceptingChunksRef.current = false
         pendingChunksRef.current.clear()
         pendingAudioBudgetRef.current.reset()
-        capture.end()
+        void capture.end()
       }
     })
   }, [capture, keepAwakeOwner])
@@ -208,11 +208,16 @@ export function useMobileDictation(options: UseMobileDictationOptions): UseMobil
     generationRef.current = generation
     finishingIdRef.current = dictationId
     setStatus('processing')
-    acceptingChunksRef.current = false
     try {
       // Inside the try so a throwing native shutdown still runs the finally
       // release and error cleanup.
-      capture.end()
+      //
+      // Awaited, and chunks are still accepted while it runs: `end` hands over whatever the
+      // capture is still holding, which on the page is up to one drain interval of the tail of
+      // what the user just said. Refusing chunks first would drop exactly that audio, and taking
+      // the pending set before it would let `finish` overtake the last send.
+      await capture.end()
+      acceptingChunksRef.current = false
       await Promise.allSettled(Array.from(pendingChunksRef.current))
       if (
         !isCurrentMobileDictationFinish(
