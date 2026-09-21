@@ -134,7 +134,7 @@ const MERMAID_PACKAGE = 'node_modules/mermaid/'
  * Measured, not derived: `mobile-web-app-session-dictation-capture.test.mjs` moves the web file
  * aside and walks the closure again, which puts those eight back.
  */
-const MODULES_WITH_MERMAID = 4326
+const MODULES_WITH_MERMAID = 4321
 
 const artifactModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PAGE_ENGINE))
 const packageModules = (inputs) => inputs.filter((input) => input.includes(MERMAID_PACKAGE))
